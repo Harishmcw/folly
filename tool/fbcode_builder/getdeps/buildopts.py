@@ -360,7 +360,9 @@ class BuildOptions:
                     yarn_exe,
                 )
             )
-            node_exe = "node-win-x64.exe" if self.is_windows() else "node"
+            node_exe = "node"
+            if self.is_windows():
+                node_exe = "node-win-arm64.exe" if self.is_arm() else "node-win-x64.exe"
             env["NODE_BIN"] = os.fspath(
                 Path(
                     #  `Optional[str]`.

@@ -91,7 +91,8 @@ class BuilderBase:
                 wrapper = os.fspath(pathlib.Path(self.build_dir, "succeed.bat"))
                 with open(wrapper, "w") as f:
                     f.write("@echo off\n")
-                    f.write(f'call "{vcvarsall}" amd64\n')
+                    arch = "arm64" if self.build_opts.is_arm() else "amd64"
+                    f.write(f'call "{vcvarsall}" {arch}\n')
                     f.write("set ERRORLEVEL=0\n")
                     f.write("exit /b 0\n")
                 return [wrapper, "&&"]
@@ -1498,7 +1499,7 @@ class OpenSSLBuilder(BuilderBase):
             # jom is compatible with nmake, adds the /j argument for parallel build
             make = "jom.exe"
             make_j_args = ["/j%s" % self.num_jobs]
-            args = ["VC-WIN64A-masm", "-utf-8"]
+            args = ["VC-WIN64-ARM", "-utf-8"] if self.build_opts.is_arm() else ["VC-WIN64A-masm", "-utf-8"]
             # fixes "if multiple CL.EXE write to the same .PDB file, please use /FS"
             extra_args = ["/FS"]
         elif self.build_opts.is_darwin():
@@ -1541,6 +1542,114 @@ class OpenSSLBuilder(BuilderBase):
         self._check_cmd(make_build, env=env)
         make_install = [make, "install_sw", "install_ssldirs"]
         self._check_cmd(make_install, env=env)
+
+
+class Boost(BuilderBase):
+    def __init__(
+        self,
+        loader: ManifestLoader,
+        dep_manifests: list[ManifestParser],
+        build_opts: BuildOptions,
+        ctx: ManifestContext,
+        manifest: ManifestParser,
+        src_dir: str,
+        build_dir: str,
+        inst_dir: str,
+        b2_args: list[str],
+    ) -> None:
+        children = os.listdir(src_dir)
+        assert len(children) == 1, "expected a single directory entry: %r" % (children,)
+        boost_src = children[0]
+        assert boost_src.startswith("boost")
+        src_dir = os.path.join(src_dir, children[0])
+        super(Boost, self).__init__(
+            loader,
+            dep_manifests,
+            build_opts,
+            ctx,
+            manifest,
+            src_dir,
+            build_dir,
+            inst_dir,
+        )
+        self.b2_args: list[str] = b2_args
+
+    def _build(self, reconfigure: bool) -> None:
+        env = self._compute_env()
+        if self.build_opts.is_arm():
+            if not self.b2_args:
+                self.b2_args = []
+            self.b2_args += [
+                "pch=off",
+                "context-impl=winfib",
+            ]
+        linkage: list[str] = ["static"]
+        if self.build_opts.is_windows() or self.build_opts.shared_libs:
+            linkage.append("shared")
+
+        args = []
+        if self.build_opts.is_darwin():
+            clang = subprocess.check_output(["xcrun", "--find", "clang"])
+            user_config = os.path.join(self.build_dir, "project-config.jam")
+            with open(user_config, "w") as jamfile:
+                jamfile.write("using clang : : %s ;\n" % clang.decode().strip())
+            args.append("--user-config=%s" % user_config)
+
+        for link in linkage:
+            bootstrap_args = self.manifest.get_section_as_args(
+                "bootstrap.args", self.ctx
+            )
+            if self.build_opts.is_windows():
+                bootstrap = os.path.join(self.src_dir, "bootstrap.bat")
+                self._check_cmd([bootstrap] + bootstrap_args, cwd=self.src_dir, env=env)
+                if self.build_opts.is_arm():
+                    args += ["address-model=64", "architecture=arm"]
+                else:
+                    args += ["address-model=64"]
+            else:
+                bootstrap = os.path.join(self.src_dir, "bootstrap.sh")
+                self._check_cmd(
+                    [bootstrap, "--prefix=%s" % self.inst_dir] + bootstrap_args,
+                    cwd=self.src_dir,
+                    env=env,
+                )
+
+            b2_args = list(self.b2_args)
+            if self.build_opts.is_arm():
+                ARM_EXCLUDED_LIBS = {
+                    "coroutine",
+                    "graph",
+                    "graph_parallel",
+                    "mpi",
+                    "python",
+                }
+                b2_args = [
+                    arg for arg in b2_args
+                    if not any(arg == f"--with-{lib}" for lib in ARM_EXCLUDED_LIBS)
+                ]
+            b2 = os.path.join(self.src_dir, "b2")
+            self._check_cmd(
+                [
+                    b2,
+                    "-j%s" % self.num_jobs,
+                    "--prefix=%s" % self.inst_dir,
+                    "--builddir=%s" % self.build_dir,
+                ]
+                + args
+                + b2_args
+                + [
+                    "link=%s" % link,
+                    "runtime-link=shared",
+                    "variant=release",
+                    "threading=multi",
+                    "debug-symbols=on",
+                    "visibility=global",
+                    "-d2",
+                    "install",
+                ],
+                cwd=self.src_dir,
+                env=env,
+            )
 
 
 class NopBuilder(BuilderBase):
