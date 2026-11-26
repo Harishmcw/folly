@@ -14,6 +14,27 @@
  * limitations under the License.
  */
 
-#pragma once
+#include <folly/testing/SocketAddressTestHelper.h>
 
-#include <folly/lang/Exception.h> // @shim
+#include <folly/portability/Sockets.h>
+
+namespace folly {
+
+bool SocketAddressTestHelper::isIPv4Enabled() {
+  return isFamilyOfAddrEnabled(kLoopbackAddrIPv4);
+}
+
+bool SocketAddressTestHelper::isIPv6Enabled() {
+  return isFamilyOfAddrEnabled(kLoopbackAddrIPv6);
+}
+
+bool SocketAddressTestHelper::isFamilyOfAddrEnabled(const char* addr) {
+  struct addrinfo hints{};
+  hints.ai_flags = AI_ADDRCONFIG;
+
+  struct addrinfo* resultsp = nullptr;
+  int err = getaddrinfo(addr, nullptr, &hints, &resultsp);
+  freeaddrinfo(resultsp);
+  return !err;
+}
+} // namespace folly

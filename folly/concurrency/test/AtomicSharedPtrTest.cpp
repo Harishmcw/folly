@@ -19,10 +19,13 @@
 #include <array>
 #include <atomic>
 #include <barrier>
+#include <cstring>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 #include <folly/Portability.h>
+#include <folly/Traits.h>
 #include <folly/concurrency/test/AtomicSharedPtrCounted.h>
 #include <folly/portability/Config.h>
 #include <folly/portability/GFlags.h>
@@ -49,7 +52,8 @@ struct foo {
 TEST(AtomicSharedPtr, operators) {
   atomic_shared_ptr<int> fooptr;
 #if FOLLY_HAS_ATOMIC_SHARED_PTR_HOOKED
-  EXPECT_TRUE(fooptr.is_lock_free());
+  std::atomic<std::array<std::uint64_t, 2>> probe{};
+  EXPECT_EQ(fooptr.is_lock_free(), probe.is_lock_free());
 #endif
   auto i = new int(5);
   std::shared_ptr<int> s(i);
@@ -68,10 +72,61 @@ TEST(AtomicSharedPtr, exchange) {
   EXPECT_EQ(*b, 1);
 }
 
+#if FOLLY_HAS_ATOMIC_SHARED_PTR_HOOKED
+namespace {
+template <typename T>
+class mutex_atomic {
+ public:
+  bool is_lock_free() const noexcept { return false; }
+
+  T load(std::memory_order) const {
+    std::lock_guard lock(mutex_);
+    return value_;
+  }
+  void store(T value, std::memory_order = std::memory_order_seq_cst) {
+    std::lock_guard lock(mutex_);
+    value_ = value;
+  }
+  T exchange(T value, std::memory_order) {
+    std::lock_guard lock(mutex_);
+    const auto old = value_;
+    value_ = value;
+    return old;
+  }
+  bool compare_exchange_weak(
+      T& expected, T desired, std::memory_order, std::memory_order) {
+    std::lock_guard lock(mutex_);
+    if (std::memcmp(&value_, &expected, sizeof(T)) != 0) {
+      expected = value_;
+      return false;
+    }
+    value_ = desired;
+    return true;
+  }
+  bool compare_exchange_weak(T& expected, T desired, std::memory_order order) {
+    return compare_exchange_weak(
+        expected, desired, order, folly::memory_order_load(order));
+  }
+
+ private:
+  mutable std::mutex mutex_;
+  T value_{};
+};
+} // namespace
+
+TEST(AtomicSharedPtr, IsLockFreeWithMutexAtomic) {
+  atomic_shared_ptr<int, mutex_atomic> ptr(std::make_shared<int>(7));
+  EXPECT_FALSE(ptr.is_lock_free());
+  EXPECT_EQ(*ptr.load(), 7);
+  ptr.store(std::make_shared<int>(11));
+  auto old = ptr.exchange({});
+  EXPECT_EQ(*old, 11);
+  EXPECT_EQ(ptr.load().get(), nullptr);
+}
+#endif
+
 TEST(AtomicSharedPtr, PointerBlockVarieties) {
-  // shared_ptr(new T) control blocks must be read directly rather than
-  // wrapped: wrapping breaks owner comparison, so a compare_exchange
-  // against the original owner only succeeds when the block is read.
+  // Allocation and deleter choices preserve shared-pointer CAS identity.
   atomic_shared_ptr<int> asp;
   auto check = [&](std::shared_ptr<int> s, int expect, bool direct) {
     asp.store(s);
@@ -89,15 +144,13 @@ TEST(AtomicSharedPtr, PointerBlockVarieties) {
   // NOLINTNEXTLINE(facebook-hte-SharedPtrFromNew)
   check(std::shared_ptr<int>(new int(1)), 1, true);
   check(std::shared_ptr<int>(new int(2), std::default_delete<int>()), 2, true);
-  // Whether a block with a stateful deleter is read directly or wrapped
-  // depends on the library's block layout; either way the value and the
-  // deleter must survive.
+  // Stateful deleters retain their original pointer and ownership.
   int tag = 0;
   auto deleter = [&tag](int* p) {
     ++tag;
     delete p;
   };
-  check(std::shared_ptr<int>(new int(3), deleter), 3, false);
+  check(std::shared_ptr<int>(new int(3), deleter), 3, true);
   EXPECT_EQ(tag, 1);
 }
 
@@ -111,20 +164,20 @@ TEST(AtomicSharedPtr, IncompleteType) {
 
 #if FOLLY_HAS_ATOMIC_SHARED_PTR_HOOKED
 TEST(AtomicSharedPtr, BlockDecodingIgnoresT) {
-  // One atomic_shared_ptr<T> can be stored from a TU where T is complete and
-  // loaded from one where it is only forward-declared, so a control block
-  // must decode to the same object whatever T it is read as.
+  // Supplied object pointers round-trip independently of T's completeness.
   struct Polymorphic {
     virtual ~Polymorphic() = default;
   };
   using internals = folly::detail::shared_ptr_internals;
   auto check = [](const std::shared_ptr<Polymorphic>& s) {
     auto* base = internals::get_counted_base(s);
-    EXPECT_EQ(internals::get_shared_ptr<Polymorphic>(base), s.get());
-    EXPECT_EQ(
-        static_cast<const void*>(
-            internals::get_shared_ptr<IncompleteType>(base)),
-        s.get());
+    auto complete =
+        internals::get_shared_ptr_from_counted_base<Polymorphic>(base, s.get());
+    auto incomplete =
+        internals::get_shared_ptr_from_counted_base<IncompleteType>(
+            base, reinterpret_cast<IncompleteType*>(s.get()));
+    EXPECT_EQ(complete.get(), s.get());
+    EXPECT_EQ(static_cast<const void*>(incomplete.get()), s.get());
   };
   check(std::make_shared<Polymorphic>());
   // NOLINTNEXTLINE(facebook-hte-SharedPtrFromNew)
@@ -133,8 +186,7 @@ TEST(AtomicSharedPtr, BlockDecodingIgnoresT) {
 #endif
 
 TEST(AtomicSharedPtr, OverAlignedMakeShared) {
-  // An over-aligned make_shared object does not sit right after the control
-  // block base; the store path must notice and wrap it.
+  // Over-aligned objects retain their original pointer and ownership.
   struct alignas(64) OverAligned {
     int value = 7;
   };
@@ -143,6 +195,10 @@ TEST(AtomicSharedPtr, OverAlignedMakeShared) {
   asp.store(s);
   EXPECT_EQ(asp.load().get(), s.get());
   EXPECT_EQ(asp.load()->value, 7);
+  auto desired = std::make_shared<OverAligned>();
+  desired->value = 11;
+  EXPECT_TRUE(asp.compare_exchange_strong(s, desired));
+  EXPECT_EQ(asp.load()->value, 11);
 }
 
 TEST(AtomicSharedPtr, AbstractType) {
@@ -153,9 +209,7 @@ TEST(AtomicSharedPtr, AbstractType) {
   struct Derived : Base {
     int f() const override { return 7; }
   };
-  // Abstract T can never name a make_shared block; stores must still work
-  // and loads must unwrap. No compare_exchange here: wrapped values never
-  // compare equal (pre-existing, both STLs).
+  // Base pointers retain ownership of their concrete derived objects.
   atomic_shared_ptr<Base> asp;
   auto s = std::shared_ptr<Base>(std::make_shared<Derived>());
   asp.store(s);
@@ -165,6 +219,8 @@ TEST(AtomicSharedPtr, AbstractType) {
   auto prev = asp.exchange(s2);
   EXPECT_EQ(prev->f(), 7);
   EXPECT_EQ(asp.load()->f(), 7);
+  EXPECT_TRUE(asp.compare_exchange_strong(s2, s));
+  EXPECT_EQ(asp.load().get(), s.get());
 }
 
 TEST(AtomicSharedPtr, foo) {
@@ -210,12 +266,67 @@ TEST(AtomicSharedPtr, counted) {
   EXPECT_EQ(1, d_count);
 }
 
+TEST(AtomicSharedPtr, CountedFactoryForwardsArguments) {
+  struct Value {
+    Value(int& reference, std::unique_ptr<int> owned)
+        : reference(&reference), owned(std::move(owned)) {}
+    int* reference;
+    std::unique_ptr<int> owned;
+  };
+  int reference = 7;
+  auto ptr = counted_ptr_internals<>::make_ptr<Value>(
+      reference, std::make_unique<int>(11));
+  EXPECT_EQ(ptr->reference, &reference);
+  EXPECT_EQ(*ptr->owned, 11);
+}
+
 TEST(AtomicSharedPtr, counted2) {
   auto foo = make_counted<std::atomic, bool>();
   atomic_shared_ptr<bool, std::atomic, counted_ptr_internals<std::atomic>>
       fooptr(foo);
   fooptr.store(foo);
   fooptr.load();
+}
+
+TEST(AtomicSharedPtr, CountedAliasingLifetime) {
+  c_count = 0;
+  d_count = 0;
+  using Ptr = counted_ptr<int>;
+  using AtomicPtr =
+      atomic_shared_ptr<int, std::atomic, counted_ptr_internals<>>;
+  int value = 7;
+  auto owner = make_counted<std::atomic, foo>();
+  Ptr alias(owner, &value);
+  owner.reset();
+  AtomicPtr ptr(std::move(alias));
+  // NOLINTNEXTLINE(bugprone-use-after-move)
+  EXPECT_EQ(alias.get(), nullptr);
+  // NOLINTNEXTLINE(bugprone-use-after-move)
+  EXPECT_EQ(alias.use_count(), 0);
+  auto loaded = ptr.load();
+  EXPECT_EQ(loaded.get(), &value);
+  EXPECT_EQ(*loaded, 7);
+  ptr.store({});
+  EXPECT_EQ(d_count, 0);
+  loaded.reset();
+  EXPECT_EQ(d_count, 1);
+
+  ptr.store(Ptr(make_counted<std::atomic, foo>(), nullptr));
+  loaded = ptr.load();
+  EXPECT_EQ(loaded.get(), nullptr);
+  EXPECT_GT(loaded.use_count(), 0);
+  ptr.store({});
+  EXPECT_EQ(d_count, 1);
+  loaded.reset();
+  EXPECT_EQ(d_count, 2);
+
+  ptr.store(Ptr(Ptr{}, &value));
+  loaded = ptr.exchange({});
+  EXPECT_EQ(loaded.get(), &value);
+  EXPECT_EQ(loaded.use_count(), 0);
+  loaded.reset();
+  EXPECT_EQ(c_count, 2);
+  EXPECT_EQ(d_count, 2);
 }
 
 #endif
@@ -240,9 +351,7 @@ TEST(AtomicSharedPtr, ConstOfMakeSharedCompareExchange) {
   EXPECT_EQ(*atom.load(), 100);
 }
 
-// Values stored through the aliased-wrapper path (here: an aliasing
-// shared_ptr) must still compare equal to themselves in compare_exchange, and
-// a failed comparison must not drop a reference.
+// Aliased shared pointers preserve their pointer and ownership in CAS.
 TEST(AtomicSharedPtr, AliasedCompareExchange) {
   auto owner = std::make_shared<std::pair<int, int>>(0, 0);
   atomic_shared_ptr<int> atom(std::shared_ptr<int>(owner, &owner->second));
@@ -303,7 +412,8 @@ TEST(AtomicSharedPtr, AliasingWithNullptrConstructorTest) {
 TEST(AtomicSharedPtr, MaxPtrs) {
   shared_ptr<long> p(new long);
   constexpr size_t max_atomic_shared_ptrs = 262144;
-  atomic_shared_ptr<long> ptrs[max_atomic_shared_ptrs];
+  auto ptrs =
+      std::make_unique<atomic_shared_ptr<long>[]>(max_atomic_shared_ptrs);
   for (size_t i = 0; i < max_atomic_shared_ptrs - 1; i++) {
     ptrs[i].store(p);
   }
@@ -415,7 +525,84 @@ TEST(AtomicSharedPtr, ArrayStoredPointer) {
       std::shared_ptr<const int[]>(new int[2]{})); // NOLINT
 }
 
+TEST(AtomicSharedPtr, SameOwnerDifferentPointerCompareExchange) {
+  auto owner = std::make_shared<std::pair<int, int>>(7, 11);
+  auto first = std::shared_ptr<int>(owner, &owner->first);
+  auto second = std::shared_ptr<int>(owner, &owner->second);
+  atomic_shared_ptr<int> ptr(first);
+  auto expected = second;
+  auto desired = std::make_shared<int>(13);
+  EXPECT_FALSE(ptr.compare_exchange_strong(expected, desired));
+  EXPECT_EQ(expected.get(), first.get());
+  EXPECT_FALSE(expected.owner_before(first));
+  EXPECT_FALSE(first.owner_before(expected));
+  EXPECT_EQ(ptr.load().get(), first.get());
+}
+
+TEST(AtomicSharedPtr, SamePointerDifferentOwnerCompareExchange) {
+  int value = 7;
+  auto first = std::shared_ptr<int>(&value, [](int*) {});
+  auto second = std::shared_ptr<int>(&value, [](int*) {});
+  atomic_shared_ptr<int> ptr(second);
+  auto expected = first;
+  auto desired = std::make_shared<int>(13);
+  EXPECT_FALSE(ptr.compare_exchange_strong(expected, desired));
+  EXPECT_EQ(expected.get(), &value);
+  EXPECT_FALSE(expected.owner_before(second));
+  EXPECT_FALSE(second.owner_before(expected));
+  EXPECT_EQ(ptr.load().get(), &value);
+  expected = first;
+  EXPECT_FALSE(ptr.compare_exchange_weak(expected, desired));
+  EXPECT_FALSE(expected.owner_before(second));
+  EXPECT_FALSE(second.owner_before(expected));
+}
+
+TEST(AtomicSharedPtr, OwningNullCompareExchange) {
+  auto owner = std::make_shared<int>(7);
+  auto owning_null = std::shared_ptr<int>(owner, nullptr);
+  atomic_shared_ptr<int> ptr(owning_null);
+  std::shared_ptr<int> expected;
+  EXPECT_FALSE(ptr.compare_exchange_strong(expected, {}));
+  EXPECT_EQ(expected.get(), nullptr);
+  EXPECT_FALSE(expected.owner_before(owner));
+  EXPECT_FALSE(owner.owner_before(expected));
+  EXPECT_TRUE(ptr.compare_exchange_strong(expected, {}));
+  EXPECT_EQ(ptr.load().get(), nullptr);
+  EXPECT_EQ(ptr.load().use_count(), 0);
+  expected = owning_null;
+  EXPECT_FALSE(ptr.compare_exchange_strong(expected, {}));
+  EXPECT_EQ(expected.use_count(), 0);
+  owning_null.reset();
+  EXPECT_EQ(owner.use_count(), 1);
+}
+
+TEST(AtomicSharedPtr, OwnerlessCompareExchangeAndExchange) {
+  int value = 7;
+  auto ownerless = std::shared_ptr<int>(std::shared_ptr<int>{}, &value);
+  atomic_shared_ptr<int> ptr(ownerless);
+  std::shared_ptr<int> expected;
+  EXPECT_FALSE(ptr.compare_exchange_strong(expected, {}));
+  EXPECT_EQ(expected.get(), &value);
+  EXPECT_EQ(expected.use_count(), 0);
+  auto old = ptr.exchange({});
+  EXPECT_EQ(old.get(), &value);
+  EXPECT_EQ(old.use_count(), 0);
+  EXPECT_FALSE(ptr.compare_exchange_strong(expected, ownerless));
+  EXPECT_EQ(expected.get(), nullptr);
+  EXPECT_EQ(expected.use_count(), 0);
+  EXPECT_TRUE(ptr.compare_exchange_strong(expected, ownerless));
+  expected = ownerless;
+  EXPECT_TRUE(ptr.compare_exchange_strong(expected, {}));
+  expected.reset();
+  EXPECT_TRUE(ptr.compare_exchange_strong(expected, {}));
+  ptr.store(std::shared_ptr<int>(std::shared_ptr<int>{}, nullptr));
+  EXPECT_TRUE(ptr.compare_exchange_strong(expected, {}));
+}
+
 #if FOLLY_HAS_ATOMIC_SHARED_PTR_HOOKED
+
+static_assert(sizeof(atomic_shared_ptr<int>) == 16);
+static_assert(alignof(atomic_shared_ptr<int>) == 16);
 
 namespace {
 std::atomic<unsigned>& atomic_accesses() {
@@ -468,37 +655,44 @@ TEST(AtomicSharedPtr, InjectedAtomicObservesAllLoads) {
 }
 
 TEST(AtomicSharedPtr, DeterministicSharedPtrAliases) {
-  DSched sched(DSched::uniform(FLAGS_seed));
-  auto owner = std::make_shared<std::pair<int, int>>(7, 11);
-  int value = 13;
-  const std::array values{
-      std::shared_ptr<int>(owner, &owner->first),
-      std::shared_ptr<int>(owner, &owner->second),
-      std::shared_ptr<int>(owner, nullptr),
-      std::shared_ptr<int>(std::shared_ptr<int>{}, &value),
-      std::shared_ptr<int>{},
+  auto check = []<typename Internals>(tag_t<Internals>) {
+    DSched sched(DSched::uniform(FLAGS_seed));
+    using Ptr = typename Internals::template CountedPtr<int>;
+    auto owner = Internals::template make_ptr<std::pair<int, int>>(7, 11);
+    int value = 13;
+    const std::array values{
+        Ptr(owner, &owner->first),
+        Ptr(owner, &owner->second),
+        Ptr(owner, nullptr),
+        Ptr(Ptr{}, &value),
+        Ptr{},
+    };
+    atomic_shared_ptr<int, DeterministicAtomic, Internals> ptr(values[0]);
+    std::vector<std::thread> threads;
+    threads.reserve(4);
+    for (unsigned tid = 0; tid < 4; ++tid) {
+      threads.emplace_back(DSched::thread([&, tid] {
+        for (unsigned i = 0; i < 100; ++i) {
+          auto loaded = ptr.load();
+          if (loaded.get()) {
+            EXPECT_TRUE(*loaded == 7 || *loaded == 11 || *loaded == 13);
+          }
+          if (loaded.get() == &value) {
+            EXPECT_EQ(loaded.use_count(), 0);
+          }
+          ptr.compare_exchange_strong(
+              loaded, values[(i + tid) % values.size()]);
+        }
+      }));
+    }
+    for (auto& thread : threads) {
+      DSched::join(thread);
+    }
+    ptr.store({});
+    EXPECT_EQ(owner.use_count(), 4);
   };
-  atomic_shared_ptr<int, DeterministicAtomic> ptr(values[0]);
-  std::vector<std::thread> threads;
-  for (unsigned tid = 0; tid < 4; ++tid) {
-    threads.emplace_back(DSched::thread([&, tid] {
-      for (unsigned i = 0; i < 100; ++i) {
-        auto loaded = ptr.load();
-        if (loaded.get()) {
-          EXPECT_TRUE(*loaded == 7 || *loaded == 11 || *loaded == 13);
-        }
-        if (loaded.get() == &value) {
-          EXPECT_EQ(loaded.use_count(), 0);
-        }
-        ptr.compare_exchange_strong(loaded, values[(i + tid) % values.size()]);
-      }
-    }));
-  }
-  for (auto& thread : threads) {
-    DSched::join(thread);
-  }
-  ptr.store({});
-  EXPECT_EQ(owner.use_count(), 4);
+  check(tag_t<folly::detail::shared_ptr_internals>{});
+  check(tag_t<counted_ptr_internals<DeterministicAtomic>>{});
 }
 
 #endif
@@ -517,7 +711,7 @@ TEST(AtomicSharedPtr, SameOwnerAliasBatchAccounting) {
       start.arrive_and_wait();
       for (unsigned i = 0; i < 65536; ++i) {
         loads.fetch_add(1, std::memory_order_relaxed);
-        auto loaded = ptr.load(std::memory_order_acquire);
+        auto loaded = ptr.load(std::memory_order_relaxed);
         EXPECT_TRUE(
             loaded.get() == &owner->first || loaded.get() == &owner->second);
         EXPECT_TRUE(*loaded == 7 || *loaded == 11);
@@ -530,7 +724,7 @@ TEST(AtomicSharedPtr, SameOwnerAliasBatchAccounting) {
       while (loads.load(std::memory_order_relaxed) < i * 4097) {
         std::this_thread::yield();
       }
-      ptr.store(values[i & 1], std::memory_order_release);
+      ptr.store(values[i & 1], std::memory_order_relaxed);
     }
     first.join();
     second.join();
@@ -589,7 +783,7 @@ TEST(AtomicSharedPtr, MixedRepresentationStress) {
     threads.emplace_back([&] {
       start.arrive_and_wait();
       do {
-        auto loaded = ptr.load(std::memory_order_acquire);
+        auto loaded = ptr.load(std::memory_order_relaxed);
         if (loaded.get() == &ownerless_value) {
           EXPECT_EQ(loaded.use_count(), 0);
           EXPECT_EQ(*loaded, 13);
@@ -605,6 +799,29 @@ TEST(AtomicSharedPtr, MixedRepresentationStress) {
   }
   ptr.store({});
   EXPECT_EQ(alive.load(), 0);
+}
+
+TEST(AtomicSharedPtr, EmptyLoadAcquiresPublication) {
+  constexpr std::array orders{
+      std::memory_order_acquire,
+      std::memory_order_seq_cst,
+  };
+  constexpr unsigned iterations = kIsSanitizeThread ? 32 : 256;
+  for (const auto order : orders) {
+    for (unsigned i = 0; i < iterations; ++i) {
+      atomic_shared_ptr<int> ptr(std::make_shared<int>(7));
+      int published = 0;
+      std::thread writer([&] {
+        published = 42;
+        ptr.store({}, std::memory_order_release);
+      });
+      while (ptr.load(order)) {
+        std::this_thread::yield();
+      }
+      EXPECT_EQ(published, 42);
+      writer.join();
+    }
+  }
 }
 
 TEST(AtomicSharedPtr, Leak) {

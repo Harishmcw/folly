@@ -1162,15 +1162,14 @@ class F14ValueMap
 #endif // FOLLY_F14_VECTOR_INTRINSICS_AVAILABLE
 
 template <
-    typename InputIt,
+    detail::LegacyInputIterator InputIt,
     typename Hasher = f14::DefaultHasher<iterator_key_type_t<InputIt>>,
     typename KeyEqual = f14::DefaultKeyEqual<iterator_key_type_t<InputIt>>,
-    typename Alloc = f14::DefaultAlloc<iterator_value_type_t<InputIt>>,
-    typename = detail::RequireInputIterator<InputIt>,
-    // Next two constraints are necessary to disambiguate from next constructor
-    typename = detail::RequireNotAllocator<Hasher>,
-    typename = detail::RequireNotAllocator<KeyEqual>,
-    typename = detail::RequireAllocator<Alloc>>
+    typename Alloc = f14::DefaultAlloc<iterator_value_type_t<InputIt>>>
+// The Hasher and KeyEqual constraints disambiguate from the next guide
+  requires(
+      !is_allocator_v<Hasher> && !is_allocator_v<KeyEqual> &&
+      is_allocator_v<Alloc>)
 F14ValueMap(
     InputIt, InputIt, std::size_t = {}, Hasher = {}, KeyEqual = {}, Alloc = {})
     -> F14ValueMap<
@@ -1180,11 +1179,8 @@ F14ValueMap(
         KeyEqual,
         Alloc>;
 
-template <
-    typename InputIt,
-    typename Alloc,
-    typename = detail::RequireInputIterator<InputIt>,
-    typename = detail::RequireAllocator<Alloc>>
+template <detail::LegacyInputIterator InputIt, typename Alloc>
+  requires is_allocator_v<Alloc>
 F14ValueMap(InputIt, InputIt, std::size_t, Alloc) -> F14ValueMap<
     iterator_key_type_t<InputIt>,
     iterator_mapped_type_t<InputIt>,
@@ -1192,13 +1188,8 @@ F14ValueMap(InputIt, InputIt, std::size_t, Alloc) -> F14ValueMap<
     f14::DefaultKeyEqual<iterator_key_type_t<InputIt>>,
     Alloc>;
 
-template <
-    typename InputIt,
-    typename Hasher,
-    typename Alloc,
-    typename = detail::RequireInputIterator<InputIt>,
-    typename = detail::RequireNotAllocator<Hasher>,
-    typename = detail::RequireAllocator<Alloc>>
+template <detail::LegacyInputIterator InputIt, typename Hasher, typename Alloc>
+  requires(!is_allocator_v<Hasher> && is_allocator_v<Alloc>)
 F14ValueMap(InputIt, InputIt, std::size_t, Hasher, Alloc) -> F14ValueMap<
     iterator_key_type_t<InputIt>,
     iterator_mapped_type_t<InputIt>,
@@ -1211,10 +1202,10 @@ template <
     typename Mapped,
     typename Hasher = f14::DefaultHasher<Key>,
     typename KeyEqual = f14::DefaultKeyEqual<Key>,
-    typename Alloc = f14::DefaultAlloc<std::pair<const Key, Mapped>>,
-    typename = detail::RequireNotAllocator<Hasher>,
-    typename = detail::RequireNotAllocator<KeyEqual>,
-    typename = detail::RequireAllocator<Alloc>>
+    typename Alloc = f14::DefaultAlloc<std::pair<const Key, Mapped>>>
+  requires(
+      !is_allocator_v<Hasher> && !is_allocator_v<KeyEqual> &&
+      is_allocator_v<Alloc>)
 F14ValueMap(
     std::initializer_list<std::pair<Key, Mapped>>,
     std::size_t = {},
@@ -1222,11 +1213,8 @@ F14ValueMap(
     KeyEqual = {},
     Alloc = {}) -> F14ValueMap<Key, Mapped, Hasher, KeyEqual, Alloc>;
 
-template <
-    typename Key,
-    typename Mapped,
-    typename Alloc,
-    typename = detail::RequireAllocator<Alloc>>
+template <typename Key, typename Mapped, typename Alloc>
+  requires is_allocator_v<Alloc>
 F14ValueMap(std::initializer_list<std::pair<Key, Mapped>>, std::size_t, Alloc)
     -> F14ValueMap<
         Key,
@@ -1235,12 +1223,8 @@ F14ValueMap(std::initializer_list<std::pair<Key, Mapped>>, std::size_t, Alloc)
         f14::DefaultKeyEqual<Key>,
         Alloc>;
 
-template <
-    typename Key,
-    typename Mapped,
-    typename Hasher,
-    typename Alloc,
-    typename = detail::RequireAllocator<Alloc>>
+template <typename Key, typename Mapped, typename Hasher, typename Alloc>
+  requires is_allocator_v<Alloc>
 F14ValueMap(
     std::initializer_list<std::pair<Key, Mapped>>, std::size_t, Hasher, Alloc)
     -> F14ValueMap<Key, Mapped, Hasher, f14::DefaultKeyEqual<Key>, Alloc>;
@@ -1311,14 +1295,13 @@ class F14NodeMap
 #endif // FOLLY_F14_VECTOR_INTRINSICS_AVAILABLE
 
 template <
-    typename InputIt,
+    detail::LegacyInputIterator InputIt,
     typename Hasher = f14::DefaultHasher<iterator_key_type_t<InputIt>>,
     typename KeyEqual = f14::DefaultKeyEqual<iterator_key_type_t<InputIt>>,
-    typename Alloc = f14::DefaultAlloc<iterator_value_type_t<InputIt>>,
-    typename = detail::RequireInputIterator<InputIt>,
-    typename = detail::RequireNotAllocator<Hasher>,
-    typename = detail::RequireNotAllocator<KeyEqual>,
-    typename = detail::RequireAllocator<Alloc>>
+    typename Alloc = f14::DefaultAlloc<iterator_value_type_t<InputIt>>>
+  requires(
+      !is_allocator_v<Hasher> && !is_allocator_v<KeyEqual> &&
+      is_allocator_v<Alloc>)
 F14NodeMap(
     InputIt, InputIt, std::size_t = {}, Hasher = {}, KeyEqual = {}, Alloc = {})
     -> F14NodeMap<
@@ -1328,11 +1311,8 @@ F14NodeMap(
         KeyEqual,
         Alloc>;
 
-template <
-    typename InputIt,
-    typename Alloc,
-    typename = detail::RequireInputIterator<InputIt>,
-    typename = detail::RequireAllocator<Alloc>>
+template <detail::LegacyInputIterator InputIt, typename Alloc>
+  requires is_allocator_v<Alloc>
 F14NodeMap(InputIt, InputIt, std::size_t, Alloc) -> F14NodeMap<
     iterator_key_type_t<InputIt>,
     iterator_mapped_type_t<InputIt>,
@@ -1340,13 +1320,8 @@ F14NodeMap(InputIt, InputIt, std::size_t, Alloc) -> F14NodeMap<
     f14::DefaultKeyEqual<iterator_key_type_t<InputIt>>,
     Alloc>;
 
-template <
-    typename InputIt,
-    typename Hasher,
-    typename Alloc,
-    typename = detail::RequireInputIterator<InputIt>,
-    typename = detail::RequireNotAllocator<Hasher>,
-    typename = detail::RequireAllocator<Alloc>>
+template <detail::LegacyInputIterator InputIt, typename Hasher, typename Alloc>
+  requires(!is_allocator_v<Hasher> && is_allocator_v<Alloc>)
 F14NodeMap(InputIt, InputIt, std::size_t, Hasher, Alloc) -> F14NodeMap<
     iterator_key_type_t<InputIt>,
     iterator_mapped_type_t<InputIt>,
@@ -1359,10 +1334,10 @@ template <
     typename Mapped,
     typename Hasher = f14::DefaultHasher<Key>,
     typename KeyEqual = f14::DefaultKeyEqual<Key>,
-    typename Alloc = f14::DefaultAlloc<std::pair<const Key, Mapped>>,
-    typename = detail::RequireNotAllocator<Hasher>,
-    typename = detail::RequireNotAllocator<KeyEqual>,
-    typename = detail::RequireAllocator<Alloc>>
+    typename Alloc = f14::DefaultAlloc<std::pair<const Key, Mapped>>>
+  requires(
+      !is_allocator_v<Hasher> && !is_allocator_v<KeyEqual> &&
+      is_allocator_v<Alloc>)
 F14NodeMap(
     std::initializer_list<std::pair<Key, Mapped>>,
     std::size_t = {},
@@ -1370,11 +1345,8 @@ F14NodeMap(
     KeyEqual = {},
     Alloc = {}) -> F14NodeMap<Key, Mapped, Hasher, KeyEqual, Alloc>;
 
-template <
-    typename Key,
-    typename Mapped,
-    typename Alloc,
-    typename = detail::RequireAllocator<Alloc>>
+template <typename Key, typename Mapped, typename Alloc>
+  requires is_allocator_v<Alloc>
 F14NodeMap(std::initializer_list<std::pair<Key, Mapped>>, std::size_t, Alloc)
     -> F14NodeMap<
         Key,
@@ -1383,12 +1355,8 @@ F14NodeMap(std::initializer_list<std::pair<Key, Mapped>>, std::size_t, Alloc)
         f14::DefaultKeyEqual<Key>,
         Alloc>;
 
-template <
-    typename Key,
-    typename Mapped,
-    typename Hasher,
-    typename Alloc,
-    typename = detail::RequireAllocator<Alloc>>
+template <typename Key, typename Mapped, typename Hasher, typename Alloc>
+  requires is_allocator_v<Alloc>
 F14NodeMap(
     std::initializer_list<std::pair<Key, Mapped>>, std::size_t, Hasher, Alloc)
     -> F14NodeMap<Key, Mapped, Hasher, f14::DefaultKeyEqual<Key>, Alloc>;
@@ -1757,14 +1725,13 @@ class F14VectorMap
 #endif // FOLLY_F14_VECTOR_INTRINSICS_AVAILABLE
 
 template <
-    typename InputIt,
+    detail::LegacyInputIterator InputIt,
     typename Hasher = f14::DefaultHasher<iterator_key_type_t<InputIt>>,
     typename KeyEqual = f14::DefaultKeyEqual<iterator_key_type_t<InputIt>>,
-    typename Alloc = f14::DefaultAlloc<iterator_value_type_t<InputIt>>,
-    typename = detail::RequireInputIterator<InputIt>,
-    typename = detail::RequireNotAllocator<Hasher>,
-    typename = detail::RequireNotAllocator<KeyEqual>,
-    typename = detail::RequireAllocator<Alloc>>
+    typename Alloc = f14::DefaultAlloc<iterator_value_type_t<InputIt>>>
+  requires(
+      !is_allocator_v<Hasher> && !is_allocator_v<KeyEqual> &&
+      is_allocator_v<Alloc>)
 F14VectorMap(
     InputIt, InputIt, std::size_t = {}, Hasher = {}, KeyEqual = {}, Alloc = {})
     -> F14VectorMap<
@@ -1774,11 +1741,8 @@ F14VectorMap(
         KeyEqual,
         Alloc>;
 
-template <
-    typename InputIt,
-    typename Alloc,
-    typename = detail::RequireInputIterator<InputIt>,
-    typename = detail::RequireAllocator<Alloc>>
+template <detail::LegacyInputIterator InputIt, typename Alloc>
+  requires is_allocator_v<Alloc>
 F14VectorMap(InputIt, InputIt, std::size_t, Alloc) -> F14VectorMap<
     iterator_key_type_t<InputIt>,
     iterator_mapped_type_t<InputIt>,
@@ -1786,13 +1750,8 @@ F14VectorMap(InputIt, InputIt, std::size_t, Alloc) -> F14VectorMap<
     f14::DefaultKeyEqual<iterator_key_type_t<InputIt>>,
     Alloc>;
 
-template <
-    typename InputIt,
-    typename Hasher,
-    typename Alloc,
-    typename = detail::RequireInputIterator<InputIt>,
-    typename = detail::RequireNotAllocator<Hasher>,
-    typename = detail::RequireAllocator<Alloc>>
+template <detail::LegacyInputIterator InputIt, typename Hasher, typename Alloc>
+  requires(!is_allocator_v<Hasher> && is_allocator_v<Alloc>)
 F14VectorMap(InputIt, InputIt, std::size_t, Hasher, Alloc) -> F14VectorMap<
     iterator_key_type_t<InputIt>,
     iterator_mapped_type_t<InputIt>,
@@ -1805,10 +1764,10 @@ template <
     typename Mapped,
     typename Hasher = f14::DefaultHasher<Key>,
     typename KeyEqual = f14::DefaultKeyEqual<Key>,
-    typename Alloc = f14::DefaultAlloc<std::pair<const Key, Mapped>>,
-    typename = detail::RequireNotAllocator<Hasher>,
-    typename = detail::RequireNotAllocator<KeyEqual>,
-    typename = detail::RequireAllocator<Alloc>>
+    typename Alloc = f14::DefaultAlloc<std::pair<const Key, Mapped>>>
+  requires(
+      !is_allocator_v<Hasher> && !is_allocator_v<KeyEqual> &&
+      is_allocator_v<Alloc>)
 F14VectorMap(
     std::initializer_list<std::pair<Key, Mapped>>,
     std::size_t = {},
@@ -1816,11 +1775,8 @@ F14VectorMap(
     KeyEqual = {},
     Alloc = {}) -> F14VectorMap<Key, Mapped, Hasher, KeyEqual, Alloc>;
 
-template <
-    typename Key,
-    typename Mapped,
-    typename Alloc,
-    typename = detail::RequireAllocator<Alloc>>
+template <typename Key, typename Mapped, typename Alloc>
+  requires is_allocator_v<Alloc>
 F14VectorMap(std::initializer_list<std::pair<Key, Mapped>>, std::size_t, Alloc)
     -> F14VectorMap<
         Key,
@@ -1829,12 +1785,8 @@ F14VectorMap(std::initializer_list<std::pair<Key, Mapped>>, std::size_t, Alloc)
         f14::DefaultKeyEqual<Key>,
         Alloc>;
 
-template <
-    typename Key,
-    typename Mapped,
-    typename Hasher,
-    typename Alloc,
-    typename = detail::RequireAllocator<Alloc>>
+template <typename Key, typename Mapped, typename Hasher, typename Alloc>
+  requires is_allocator_v<Alloc>
 F14VectorMap(
     std::initializer_list<std::pair<Key, Mapped>>, std::size_t, Hasher, Alloc)
     -> F14VectorMap<Key, Mapped, Hasher, f14::DefaultKeyEqual<Key>, Alloc>;
@@ -1893,14 +1845,13 @@ class F14FastMap
 #endif // if FOLLY_F14_VECTOR_INTRINSICS_AVAILABLE
 
 template <
-    typename InputIt,
+    detail::LegacyInputIterator InputIt,
     typename Hasher = f14::DefaultHasher<iterator_key_type_t<InputIt>>,
     typename KeyEqual = f14::DefaultKeyEqual<iterator_key_type_t<InputIt>>,
-    typename Alloc = f14::DefaultAlloc<iterator_value_type_t<InputIt>>,
-    typename = detail::RequireInputIterator<InputIt>,
-    typename = detail::RequireNotAllocator<Hasher>,
-    typename = detail::RequireNotAllocator<KeyEqual>,
-    typename = detail::RequireAllocator<Alloc>>
+    typename Alloc = f14::DefaultAlloc<iterator_value_type_t<InputIt>>>
+  requires(
+      !is_allocator_v<Hasher> && !is_allocator_v<KeyEqual> &&
+      is_allocator_v<Alloc>)
 F14FastMap(
     InputIt, InputIt, std::size_t = {}, Hasher = {}, KeyEqual = {}, Alloc = {})
     -> F14FastMap<
@@ -1910,11 +1861,8 @@ F14FastMap(
         KeyEqual,
         Alloc>;
 
-template <
-    typename InputIt,
-    typename Alloc,
-    typename = detail::RequireInputIterator<InputIt>,
-    typename = detail::RequireAllocator<Alloc>>
+template <detail::LegacyInputIterator InputIt, typename Alloc>
+  requires is_allocator_v<Alloc>
 F14FastMap(InputIt, InputIt, std::size_t, Alloc) -> F14FastMap<
     iterator_key_type_t<InputIt>,
     iterator_mapped_type_t<InputIt>,
@@ -1922,13 +1870,8 @@ F14FastMap(InputIt, InputIt, std::size_t, Alloc) -> F14FastMap<
     f14::DefaultKeyEqual<iterator_key_type_t<InputIt>>,
     Alloc>;
 
-template <
-    typename InputIt,
-    typename Hasher,
-    typename Alloc,
-    typename = detail::RequireInputIterator<InputIt>,
-    typename = detail::RequireNotAllocator<Hasher>,
-    typename = detail::RequireAllocator<Alloc>>
+template <detail::LegacyInputIterator InputIt, typename Hasher, typename Alloc>
+  requires(!is_allocator_v<Hasher> && is_allocator_v<Alloc>)
 F14FastMap(InputIt, InputIt, std::size_t, Hasher, Alloc) -> F14FastMap<
     iterator_key_type_t<InputIt>,
     iterator_mapped_type_t<InputIt>,
@@ -1941,10 +1884,10 @@ template <
     typename Mapped,
     typename Hasher = f14::DefaultHasher<Key>,
     typename KeyEqual = f14::DefaultKeyEqual<Key>,
-    typename Alloc = f14::DefaultAlloc<std::pair<const Key, Mapped>>,
-    typename = detail::RequireNotAllocator<Hasher>,
-    typename = detail::RequireNotAllocator<KeyEqual>,
-    typename = detail::RequireAllocator<Alloc>>
+    typename Alloc = f14::DefaultAlloc<std::pair<const Key, Mapped>>>
+  requires(
+      !is_allocator_v<Hasher> && !is_allocator_v<KeyEqual> &&
+      is_allocator_v<Alloc>)
 F14FastMap(
     std::initializer_list<std::pair<Key, Mapped>>,
     std::size_t = {},
@@ -1952,11 +1895,8 @@ F14FastMap(
     KeyEqual = {},
     Alloc = {}) -> F14FastMap<Key, Mapped, Hasher, KeyEqual, Alloc>;
 
-template <
-    typename Key,
-    typename Mapped,
-    typename Alloc,
-    typename = detail::RequireAllocator<Alloc>>
+template <typename Key, typename Mapped, typename Alloc>
+  requires is_allocator_v<Alloc>
 F14FastMap(std::initializer_list<std::pair<Key, Mapped>>, std::size_t, Alloc)
     -> F14FastMap<
         Key,
@@ -1965,12 +1905,8 @@ F14FastMap(std::initializer_list<std::pair<Key, Mapped>>, std::size_t, Alloc)
         f14::DefaultKeyEqual<Key>,
         Alloc>;
 
-template <
-    typename Key,
-    typename Mapped,
-    typename Hasher,
-    typename Alloc,
-    typename = detail::RequireAllocator<Alloc>>
+template <typename Key, typename Mapped, typename Hasher, typename Alloc>
+  requires is_allocator_v<Alloc>
 F14FastMap(
     std::initializer_list<std::pair<Key, Mapped>>, std::size_t, Hasher, Alloc)
     -> F14FastMap<Key, Mapped, Hasher, f14::DefaultKeyEqual<Key>, Alloc>;

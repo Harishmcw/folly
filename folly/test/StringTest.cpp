@@ -378,6 +378,18 @@ TEST(Escape, cUnescape) {
       cUnescape<std::string>("hello\\q"),
       std::invalid_argument,
       "invalid escape sequence");
+
+  // \x must be followed by at least one hex digit, also before other text.
+  EXPECT_THROW_RE(
+      cUnescape<std::string>("hello\\xg"),
+      std::invalid_argument,
+      "incomplete hex escape sequence");
+  EXPECT_THROW_RE(
+      cUnescape<std::string>("\\x\\n"),
+      std::invalid_argument,
+      "incomplete hex escape sequence");
+  EXPECT_EQ("hello\\xg", cUnescape<std::string>("hello\\xg", false));
+  EXPECT_EQ("\\x\n", cUnescape<std::string>("\\x\\n", false));
 }
 
 TEST(Escape, uriEscape) {
@@ -1796,6 +1808,42 @@ TEST(String, whitespace) {
   EXPECT_EQ("", rtrimWhitespace("\r "));
   EXPECT_EQ("", rtrimWhitespace("\n   "));
   EXPECT_EQ("", rtrimWhitespace("\r   "));
+}
+
+TEST(String, stringReplaceAll) {
+  std::string s = "a.b.c";
+  string_replace_all(s, ".", "::");
+  EXPECT_EQ("a::b::c", s);
+
+  s = "aaa";
+  string_replace_all(s, "aa", "b");
+  EXPECT_EQ("ba", s);
+
+  s = "aa";
+  string_replace_all(s, "a", "aa");
+  EXPECT_EQ("aaaa", s);
+
+  s = "x\ny\n";
+  string_replace_all(s, "\n", "");
+  EXPECT_EQ("xy", s);
+
+  s = "abc";
+  string_replace_all(s, "", "x");
+  EXPECT_EQ("abc", s);
+  string_replace_all(s, "d", "x");
+  EXPECT_EQ("abc", s);
+
+  s = "";
+  string_replace_all(s, "a", "b");
+  EXPECT_EQ("", s);
+
+  s = ".a.";
+  string_replace_all(s, ".", "--");
+  EXPECT_EQ("--a--", s);
+
+  fbstring f = "f(anonymous namespace)::g(anonymous namespace)";
+  string_replace_all(f, "(anonymous namespace)", "(anon)");
+  EXPECT_EQ("f(anon)::g(anon)", f);
 }
 
 TEST(String, trim) {

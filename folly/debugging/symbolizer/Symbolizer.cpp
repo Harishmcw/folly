@@ -18,17 +18,20 @@
 
 #include <cstdlib>
 #include <span>
+#include <string_view>
 
 #include <folly/Demangle.h>
 #include <folly/FileUtil.h>
 #include <folly/Memory.h>
 #include <folly/ScopeGuard.h>
 #include <folly/debugging/symbolizer/Dwarf.h>
+#include <folly/debugging/symbolizer/DwarfCursor.h>
 #include <folly/debugging/symbolizer/Elf.h>
 #include <folly/debugging/symbolizer/ElfCache.h>
 #include <folly/debugging/symbolizer/SymbolCache.h>
 #include <folly/debugging/symbolizer/detail/Debug.h>
 #include <folly/debugging/symbolizer/detail/SignalSafeLibc.h>
+#include <folly/lang/Hint.h>
 #include <folly/lang/SafeAssert.h>
 #include <folly/lang/ToAscii.h>
 #include <folly/memory/SanitizeAddress.h>
@@ -261,6 +264,10 @@ size_t spliceFrames(
     size_t index,
     size_t addrCount,
     const CachedSymbolizedFrames& src) {
+  if (src.empty()) {
+    FOLLY_SAFE_DFATAL("spliceFrames called with no frames");
+    return 0;
+  }
   size_t const numInlined = src.size() - 1;
   if (numInlined != 0) {
     std::move_backward(
@@ -725,7 +732,17 @@ UnsafeSelfAllocateStackTracePrinter::UnsafeSelfAllocateStackTracePrinter(int fd)
 #if FOLLY_HAVE_ELF && FOLLY_HAVE_DWARF
     constexpr uint8_t kTerminator[] = {0};
     std::span<const uint8_t> terminated{kTerminator};
-    (void)readNullTerminated(terminated);
+    compiler_must_not_predict(terminated);
+    DwarfCursor cursor{terminated};
+    auto string = cursor.readCString();
+    compiler_must_not_elide(string);
+    // `std::string_view` equality (section-name lookup) lowers to `bcmp` in
+    // opt builds; resolve its binding before installing signal handlers.
+    const std::string_view nameA{".a"};
+    const std::string_view nameB{".b"};
+    compiler_must_not_predict(nameA);
+    compiler_must_not_predict(nameB);
+    compiler_must_not_elide(nameA == nameB);
 #endif
     char demangled[8];
     (void)folly::demangle("_Z1fv", demangled, sizeof(demangled));

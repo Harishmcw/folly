@@ -20,12 +20,16 @@
 
 #if FOLLY_HAS_EPOLL
 
+#include <sys/types.h>
+
+#include <array>
 #include <chrono>
 #include <map>
 #include <optional>
 #include <set>
 #include <vector>
 
+#include <folly/container/F14Map.h>
 #include <folly/container/IntrusiveHeap.h>
 #include <folly/io/async/EventBaseBackendBase.h>
 
@@ -42,6 +46,9 @@ class EpollBackend : public EventBaseBackendBase {
     }
   };
 
+  // The epoll fd and the timerfd are shared with a forked child. Adding an
+  // Event or looping in the child terminates with "pid mismatch"; deleting one
+  // there, as destructors do, leaves the kernel alone.
   explicit EpollBackend(Options options);
   ~EpollBackend() override;
 
@@ -62,7 +69,16 @@ class EpollBackend : public EventBaseBackendBase {
   bool setEdgeTriggered(Event& event) override;
 
  private:
+  struct EventInfo;
   struct TimerInfo;
+
+  // The Event that holds each direction of an fd's epoll entry, and the
+  // generation the entry carries.
+  struct FdEntry {
+    std::array<EventInfo*, 2> owners{};
+    uint32_t generation{0};
+    bool edge{false};
+  };
 
   class SocketPair {
    public:
@@ -81,7 +97,23 @@ class EpollBackend : public EventBaseBackendBase {
     std::array<int, 2> fds_{{-1, -1}};
   };
 
-  void updateTimerFd();
+  bool inOtherProcess() const;
+  void checkPid() const;
+  [[noreturn]] void checkPidFail() const;
+
+  static uint32_t interest(const FdEntry& entry);
+  // These return 0, or -1 with errno.
+  // Gives `info` a new entry for `fd`: EEXIST while another Event's
+  // registration on the fd is live.
+  int holdFdAlone(int fd, EventInfo* info, short dirs);
+  // Adds `dirs`, which no Event holds, to the entry of `fd`.
+  int joinFd(int fd, EventInfo* info, short dirs);
+  // Ends `info`'s hold on `fd`, unless another Event took the number over.
+  int releaseFd(int fd, EventInfo* info);
+
+  // Arms the timerfd for the earliest timer unless it is armed no later than
+  // that. Cancelling a timer leaves it armed early, which costs one wake.
+  void armTimerFd();
   void addTimerEvent(Event& event, const struct timeval* timeout);
   int removeTimerEvent(Event& event);
   void processTimers();
@@ -92,8 +124,12 @@ class EpollBackend : public EventBaseBackendBase {
   void processSignals();
 
   const Options options_;
+  const pid_t pid_;
 
   int epollFd_{-1};
+
+  F14FastMap<int, FdEntry> fds_;
+  uint32_t nextGeneration_{0};
 
   size_t numInsertedEvents_{0};
   size_t numInternalEvents_{0};
@@ -102,6 +138,8 @@ class EpollBackend : public EventBaseBackendBase {
   std::vector<struct epoll_event> events_; // Cache allocation.
 
   int timerFd_{-1};
+  // The deadline the timerfd is armed for, never later than the earliest
+  // timer's. The timerfd fires then, or 1 ms after arming if that is later.
   std::optional<std::chrono::steady_clock::time_point> timerFdExpiration_;
   IntrusiveHeap<TimerInfo> timers_;
 

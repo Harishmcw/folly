@@ -93,7 +93,7 @@ folly_add_library(
   NAME ip_address
   SRCS IPAddress.cpp
   HEADERS IPAddress.h
-  DEPS folly_portability_fmt_compile
+  DEPS fmt::fmt
   EXPORTED_DEPS folly_portability_sockets
 )
 
@@ -165,7 +165,6 @@ folly_add_library(
     folly_detail_typelist
     folly_functional_invoke
     folly_lang_exception
-    folly_lang_static_const
     folly_poly_exception
     folly_portability
     folly_traits
@@ -286,6 +285,7 @@ folly_add_library(
     folly_hash_murmur_hash
     folly_lang_hint
     folly_memory_sanitize_leak
+    folly_portability_gflags
     folly_random_hash
     folly_synchronization_call_once
     folly_utility
@@ -330,6 +330,15 @@ folly_add_library(
   HEADERS TrapOnAvx512.h
   DEPS folly_portability
 )
+if (IS_X86_64_ARCH)
+  target_compile_options(
+    folly_detail_traponavx512_obj
+    PRIVATE
+      -msse4.2
+      -mavx512f
+      -mavx512vl
+  )
+endif ()
 
 folly_add_library(
   NAME tuple

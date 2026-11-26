@@ -19,6 +19,7 @@ folly_add_library(
   SRCS
     AsyncTimeout.cpp
     EventBase.cpp
+    EventBaseAtomicNotificationQueue.cpp
     EventBaseBackendBase.cpp
     EventBaseLocal.cpp
     EventHandler.cpp
@@ -50,7 +51,6 @@ folly_add_library(
     folly_system_thread_name
   EXPORTED_DEPS
     ${GLOG_LIBRARIES}
-    Boost::headers
     folly_container_f14_hash
     folly_container_intrusive_list
     folly_exception
@@ -404,11 +404,15 @@ folly_add_library(
     Epoll.h
     EpollBackend.h
   DEPS
+    folly_conv
     folly_file_util
     folly_intrusive_list
+    folly_lang_exception
     folly_map_util
     folly_string
+    folly_system_pid
   EXPORTED_DEPS
+    folly_container_f14_hash
     folly_container_intrusive_heap
     folly_io_async_async_base
 )
@@ -555,15 +559,14 @@ folly_add_library(
     IoUringDynamicProvidedBufferRing.h
   DEPS
     folly_conv
-    folly_lang_align
     folly_portability_sys_mman
     folly_string
   EXPORTED_DEPS
-    folly_concurrency_memory_tl_ref_count
     folly_container_intrusive_list
     folly_io_async_delayed_destruction
     folly_io_async_liburing
     folly_io_iobuf
+    folly_lang_align
 )
 
 folly_add_library(
@@ -600,6 +603,7 @@ folly_add_library(
     folly_conv
     folly_lang_align
     folly_portability_sys_mman
+    folly_scope_guard
     folly_string
   EXPORTED_DEPS
     folly_container_intrusive_list
@@ -663,6 +667,7 @@ folly_add_library(
     folly_string
     folly_synchronization_distributed_mutex
   EXPORTED_DEPS
+    folly_file
     folly_io_async_liburing
     folly_io_iobuf
 )
@@ -718,6 +723,7 @@ folly_add_library(
     folly_concurrency_container_single_writer_fixed_hash_map
     folly_demangle
     folly_glog
+    folly_indestructible
     folly_scope_guard
     folly_tracing_static_tracepoint
     folly_utility
@@ -876,3 +882,4 @@ folly_add_library(
 add_subdirectory(fdsock)
 add_subdirectory(observer)
 add_subdirectory(ssl)
+add_subdirectory(testing)

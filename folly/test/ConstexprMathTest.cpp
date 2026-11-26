@@ -245,18 +245,6 @@ TEST_F(ConstexprMathTest, constexpr_max) {
   EXPECT_TRUE((std::is_same<const uint16_t, decltype(a)>::value));
 }
 
-TEST_F(ConstexprMathTest, constexpr_clamp) {
-  constexpr auto lo = uint16_t(3);
-  constexpr auto hi = uint16_t(7);
-  constexpr auto x = folly::constexpr_clamp(uint16_t(2), lo, hi);
-  constexpr auto y = folly::constexpr_clamp(uint16_t(5), lo, hi);
-  constexpr auto z = folly::constexpr_clamp(uint16_t(8), lo, hi);
-  EXPECT_EQ(3, x);
-  EXPECT_EQ(5, y);
-  EXPECT_EQ(7, z);
-  EXPECT_TRUE((std::is_same<const uint16_t, decltype(y)>::value));
-}
-
 TEST_F(ConstexprMathTest, constexpr_abs_unsigned) {
   constexpr auto v = uint32_t(17);
   constexpr auto a = folly::constexpr_abs(v);
@@ -1562,6 +1550,70 @@ TEST_F(ConstexprMathTest, constexpr_sub_overflow_clamped) {
     }
   }
 
+  // Runtime wide-type boundaries. These operands are not constant
+  // expressions, so they exercise the checked_sub fast path
+  // (!is_constant_evaluated()) at full width. The constexpr cases below
+  // only cover the constant-evaluation fallback.
+  {
+    int64_t a = 23;
+    int64_t b = 12;
+    EXPECT_EQ(int64_t(11), folly::constexpr_sub_overflow_clamped(a, b));
+  }
+  {
+    int64_t a = 23;
+    int64_t b = kInt64Min;
+    EXPECT_EQ(kInt64Max, folly::constexpr_sub_overflow_clamped(a, b));
+  }
+  {
+    int64_t a = kInt64Min;
+    int64_t b = 1;
+    EXPECT_EQ(kInt64Min, folly::constexpr_sub_overflow_clamped(a, b));
+  }
+  {
+    int64_t a = kInt64Max;
+    int64_t b = -1;
+    EXPECT_EQ(kInt64Max, folly::constexpr_sub_overflow_clamped(a, b));
+  }
+  {
+    int64_t a = kInt64Min;
+    int64_t b = kInt64Min;
+    EXPECT_EQ(int64_t(0), folly::constexpr_sub_overflow_clamped(a, b));
+  }
+  {
+    int64_t a = -1;
+    int64_t b = kInt64Min;
+    EXPECT_EQ(kInt64Max, folly::constexpr_sub_overflow_clamped(a, b));
+  }
+  {
+    int64_t a = -23;
+    int64_t b = kInt64Min;
+    EXPECT_EQ(kInt64Max - 22, folly::constexpr_sub_overflow_clamped(a, b));
+  }
+  {
+    uint64_t a = 12;
+    uint64_t b = 23;
+    EXPECT_EQ(uint64_t(0), folly::constexpr_sub_overflow_clamped(a, b));
+  }
+  {
+    uint64_t a = 0;
+    uint64_t b = kUInt64Max;
+    EXPECT_EQ(uint64_t(0), folly::constexpr_sub_overflow_clamped(a, b));
+  }
+  {
+    int32_t a = std::numeric_limits<int32_t>::max();
+    int32_t b = -1;
+    EXPECT_EQ(
+        std::numeric_limits<int32_t>::max(),
+        folly::constexpr_sub_overflow_clamped(a, b));
+  }
+  {
+    int32_t a = std::numeric_limits<int32_t>::min();
+    int32_t b = 1;
+    EXPECT_EQ(
+        std::numeric_limits<int32_t>::min(),
+        folly::constexpr_sub_overflow_clamped(a, b));
+  }
+
   constexpr auto v1 =
       folly::constexpr_sub_overflow_clamped(int64_t(23), int64_t(12));
   EXPECT_EQ(int64_t(11), v1);
@@ -1598,8 +1650,8 @@ void for_each_argument(F&& f, Args&&... args) {
 
 // float -> integral clamp cast
 template <typename Src, typename Dst>
-static typename std::enable_if<std::is_floating_point<Src>::value, void>::type
-run_constexpr_clamp_cast_test(Src, Dst) {
+  requires std::is_floating_point_v<Src>
+static void run_constexpr_clamp_cast_test(Src, Dst) {
   constexpr auto kQuietNaN = std::numeric_limits<Src>::quiet_NaN();
   constexpr auto kSignalingNaN = std::numeric_limits<Src>::signaling_NaN();
   constexpr auto kPositiveInf = std::numeric_limits<Src>::infinity();
@@ -1633,8 +1685,8 @@ run_constexpr_clamp_cast_test(Src, Dst) {
 
 // integral -> integral clamp cast
 template <typename Src, typename Dst>
-static typename std::enable_if<std::is_integral<Src>::value, void>::type
-run_constexpr_clamp_cast_test(Src, Dst) {
+  requires std::is_integral_v<Src>
+static void run_constexpr_clamp_cast_test(Src, Dst) {
   constexpr auto kSrcMax = std::numeric_limits<Src>::max();
   constexpr auto kSrcMin = std::numeric_limits<Src>::min();
 

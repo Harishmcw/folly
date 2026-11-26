@@ -83,23 +83,13 @@ struct TemporaryEmplaceKey {
 // about heterogeneous lookup you can just pass a single-arg template
 // that extends std::false_type.
 
-// TODO(T31574848): We can remove the std::enable_if_t once we no longer
-// target platforms without N4387 ("perfect initialization" for pairs
-// and tuples).  libstdc++ at gcc-6.1.0 is the first release that contains
-// the improved set of pair constructors.
 template <
     typename KeyType,
     typename MappedType,
     typename Func,
     typename UsableKeyType,
     typename Arg1,
-    typename Arg2,
-    std::enable_if_t<
-        std::is_constructible<
-            std::pair<KeyType const, MappedType>,
-            Arg1&&,
-            Arg2&&>::value,
-        int> = 0>
+    typename Arg2>
 auto callWithKeyAndPairArgs(
     Func&& f,
     UsableKeyType const& key,
@@ -140,11 +130,10 @@ template <
     typename Alloc,
     typename Func,
     typename Arg1,
-    typename... Args2,
-    std::enable_if_t<
-        std::is_same<std::remove_cvref_t<Arg1>, KeyType>::value ||
-            UsableAsKey<std::remove_cvref_t<Arg1>>::value,
-        int> = 0>
+    typename... Args2>
+  requires(
+      std::is_same_v<std::remove_cvref_t<Arg1>, KeyType> ||
+      UsableAsKey<std::remove_cvref_t<Arg1>>::value)
 auto callWithExtractedKey(
     Alloc& /*unused*/,
     Func&& f,
@@ -261,11 +250,10 @@ template <
     template <typename> class UsableAsKey = ExactKeyMatchOnly,
     typename Alloc,
     typename Func,
-    typename Arg,
-    std::enable_if_t<
-        std::is_same<std::remove_cvref_t<Arg>, KeyType>::value ||
-            UsableAsKey<std::remove_cvref_t<Arg>>::value,
-        int> = 0>
+    typename Arg>
+  requires(
+      std::is_same_v<std::remove_cvref_t<Arg>, KeyType> ||
+      UsableAsKey<std::remove_cvref_t<Arg>>::value)
 auto callWithConstructedKey(Alloc& /*unused*/, Func&& f, Arg&& arg) {
   // we found a usable key in the args :)
   auto const& key = arg;
@@ -296,8 +284,8 @@ template <typename T>
 using RequireNotAllocator = std::enable_if_t<!is_allocator_v<T>, T>;
 
 template <typename T>
-using RequireInputIterator =
-    std::enable_if_t<iterator_category_matches_v<T, std::input_iterator_tag>>;
+concept LegacyInputIterator =
+    iterator_category_matches_v<T, std::input_iterator_tag>;
 
 } // namespace detail
 } // namespace folly

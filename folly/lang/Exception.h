@@ -226,8 +226,8 @@ template <
     typename F,
     typename... A,
     typename FD = std::remove_pointer_t<std::decay_t<F>>,
-    std::enable_if_t<!std::is_function<FD>::value, int> = 0,
     typename R = decltype(FOLLY_DECLVAL(F&&)(FOLLY_DECLVAL(A&&)...))>
+  requires(!std::is_function_v<FD>)
 [[FOLLY_ATTR_GNU_COLD]] FOLLY_NOINLINE R invoke_cold(F&& f, A&&... a) //
     noexcept(noexcept(static_cast<F&&>(f)(static_cast<A&&>(a)...))) {
   return static_cast<F&&>(f)(static_cast<A&&>(a)...);
@@ -236,8 +236,8 @@ template <
     typename F,
     typename... A,
     typename FD = std::remove_pointer_t<std::decay_t<F>>,
-    std::enable_if_t<std::is_function<FD>::value, int> = 0,
     typename R = decltype(FOLLY_DECLVAL(F&&)(FOLLY_DECLVAL(A&&)...))>
+  requires std::is_function_v<FD>
 FOLLY_ERASE R invoke_cold(F&& f, A&&... a) //
     noexcept(noexcept(f(static_cast<A&&>(a)...))) {
   return f(static_cast<A&&>(a)...);
@@ -971,13 +971,11 @@ class exception_shared_string {
       }
     }
 
-#if !defined(__NVCC__)
     constexpr tagged_what_t(vtag_t<true> /*literal*/, const char* p) : p_{p} {
       if (!std::is_constant_evaluated()) {
         assert_top_bit_is_zero(p);
       }
     }
-#endif
     // NEVER make this `constexpr`; `what()` explains why.
     tagged_what_t(vtag_t<false> /*allocated*/, const char* p)
         : p_{reinterpret_cast<const char*>(
@@ -1009,10 +1007,8 @@ class exception_shared_string {
   void ruin_state() noexcept;
 
  public:
-#if !defined(__NVCC__)
   constexpr explicit exception_shared_string(literal_c_str p) noexcept
       : tagged_what_{vtag<true>, p.ptr} {}
-#endif
 
   exception_shared_string(char const*, std::size_t);
 
@@ -1032,7 +1028,6 @@ class exception_shared_string {
   exception_shared_string(exception_shared_string const&) noexcept;
   exception_shared_string& operator=(exception_shared_string const&) noexcept;
 
-#if !defined(__NVCC__)
   constexpr exception_shared_string(exception_shared_string&& that) noexcept
       : tagged_what_{that.tagged_what_} {
     that.tagged_what_ =
@@ -1040,10 +1035,6 @@ class exception_shared_string {
   }
 
   exception_shared_string& operator=(exception_shared_string&&) noexcept;
-#else
-  exception_shared_string(exception_shared_string&&) = delete;
-  exception_shared_string& operator=(exception_shared_string&&) = delete;
-#endif
 
   constexpr ~exception_shared_string() {
     if (!std::is_constant_evaluated()) {

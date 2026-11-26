@@ -152,12 +152,13 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
     message(FATAL_ERROR "Folly requires a 64bit target architecture.")
   endif ()
 
-  if (MSVC_VERSION LESS 1900)
+  if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" AND
+      CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19.29.30133)
     message(
       FATAL_ERROR
         "This build script only supports building Folly on 64-bit Windows with "
-        "at least Visual Studio 2017. "
-        "MSVC version '${MSVC_VERSION}' is not supported."
+        "at least Visual Studio 2019 16.11. "
+        "MSVC version '${CMAKE_CXX_COMPILER_VERSION}' is not supported."
     )
   endif ()
 endif ()
@@ -266,17 +267,17 @@ endif ()
 list(
   APPEND
   hfiles
-  ${FOLLY_DIR}/container/test/F14TestUtil.h
-  ${FOLLY_DIR}/container/test/TrackingTypes.h
+  ${FOLLY_DIR}/container/testing/F14TestUtil.h
+  ${FOLLY_DIR}/container/testing/TrackingTypes.h
   ${FOLLY_DIR}/io/async/test/AsyncSocketTest2.h
   ${FOLLY_DIR}/io/async/test/CallbackStateEnum.h
   ${FOLLY_DIR}/io/async/test/ConnCallback.h
-  ${FOLLY_DIR}/io/async/test/MockAsyncSocket.h
-  ${FOLLY_DIR}/io/async/test/MockAsyncServerSocket.h
-  ${FOLLY_DIR}/io/async/test/MockAsyncTransport.h
-  ${FOLLY_DIR}/io/async/test/MockAsyncUDPSocket.h
-  ${FOLLY_DIR}/io/async/test/MockTimeoutManager.h
-  ${FOLLY_DIR}/io/async/test/ScopedBoundPort.h
+  ${FOLLY_DIR}/io/async/testing/MockAsyncSocket.h
+  ${FOLLY_DIR}/io/async/testing/MockAsyncServerSocket.h
+  ${FOLLY_DIR}/io/async/testing/MockAsyncTransport.h
+  ${FOLLY_DIR}/io/async/testing/MockAsyncUDPSocket.h
+  ${FOLLY_DIR}/io/async/testing/MockTimeoutManager.h
+  ${FOLLY_DIR}/io/async/testing/ScopedBoundPort.h
   ${FOLLY_DIR}/io/async/test/SocketPair.h
   ${FOLLY_DIR}/io/async/test/TFOUtil.h
   ${FOLLY_DIR}/io/async/test/TimeUtil.h
@@ -293,10 +294,10 @@ if (FOLLY_HAVE_OPENSSL)
     APPEND
     hfiles
     ${FOLLY_DIR}/io/async/test/AsyncSocketTest.h
-    ${FOLLY_DIR}/io/async/test/AsyncSSLSocketTest.h
-    ${FOLLY_DIR}/io/async/test/BlockingSocket.h
-    ${FOLLY_DIR}/io/async/test/MockAsyncSSLSocket.h
-    ${FOLLY_DIR}/io/async/test/TestSSLServer.h
+    ${FOLLY_DIR}/io/async/testing/AsyncSSLSocketTest.h
+    ${FOLLY_DIR}/io/async/testing/BlockingSocket.h
+    ${FOLLY_DIR}/io/async/testing/MockAsyncSSLSocket.h
+    ${FOLLY_DIR}/io/async/testing/TestSSLServer.h
   )
 endif ()
 
@@ -519,22 +520,22 @@ if (BUILD_TESTS OR BUILD_BENCHMARKS)
     ${FOLLY_DIR}/test/DeterministicSchedule.cpp
     ${FOLLY_DIR}/test/DeterministicSchedule.h
     ${FOLLY_DIR}/test/SingletonTestStructs.cpp
-    ${FOLLY_DIR}/test/SocketAddressTestHelper.cpp
-    ${FOLLY_DIR}/test/SocketAddressTestHelper.h
+    ${FOLLY_DIR}/testing/SocketAddressTestHelper.cpp
+    ${FOLLY_DIR}/testing/SocketAddressTestHelper.h
     ${FOLLY_DIR}/compression/test/CodingTestUtils.cpp
-    ${FOLLY_DIR}/container/test/F14TestUtil.h
-    ${FOLLY_DIR}/container/test/TrackingTypes.h
-    ${FOLLY_DIR}/futures/test/TestExecutor.cpp
-    ${FOLLY_DIR}/futures/test/TestExecutor.h
+    ${FOLLY_DIR}/container/testing/F14TestUtil.h
+    ${FOLLY_DIR}/container/testing/TrackingTypes.h
+    ${FOLLY_DIR}/executors/testing/SimpleThreadPoolExecutor.cpp
+    ${FOLLY_DIR}/executors/testing/SimpleThreadPoolExecutor.h
     ${FOLLY_DIR}/io/async/test/CallbackStateEnum.h
     ${FOLLY_DIR}/io/async/test/ConnCallback.h
-    ${FOLLY_DIR}/io/async/test/MockAsyncServerSocket.h
-    ${FOLLY_DIR}/io/async/test/MockAsyncSocket.h
-    ${FOLLY_DIR}/io/async/test/MockAsyncTransport.h
-    ${FOLLY_DIR}/io/async/test/MockAsyncUDPSocket.h
-    ${FOLLY_DIR}/io/async/test/MockTimeoutManager.h
-    ${FOLLY_DIR}/io/async/test/ScopedBoundPort.cpp
-    ${FOLLY_DIR}/io/async/test/ScopedBoundPort.h
+    ${FOLLY_DIR}/io/async/testing/MockAsyncServerSocket.h
+    ${FOLLY_DIR}/io/async/testing/MockAsyncSocket.h
+    ${FOLLY_DIR}/io/async/testing/MockAsyncTransport.h
+    ${FOLLY_DIR}/io/async/testing/MockAsyncUDPSocket.h
+    ${FOLLY_DIR}/io/async/testing/MockTimeoutManager.h
+    ${FOLLY_DIR}/io/async/testing/ScopedBoundPort.cpp
+    ${FOLLY_DIR}/io/async/testing/ScopedBoundPort.h
     ${FOLLY_DIR}/io/async/test/SocketPair.cpp
     ${FOLLY_DIR}/io/async/test/SocketPair.h
     ${FOLLY_DIR}/io/async/test/TFOUtil.cpp
@@ -568,12 +569,12 @@ if (BUILD_TESTS OR BUILD_BENCHMARKS)
     target_sources(
       folly_test_support
       PRIVATE
-        ${FOLLY_DIR}/io/async/test/BlockingSocket.h
-        ${FOLLY_DIR}/io/async/test/MockAsyncSSLSocket.h
+        ${FOLLY_DIR}/io/async/testing/BlockingSocket.h
+        ${FOLLY_DIR}/io/async/testing/MockAsyncSSLSocket.h
         ${FOLLY_DIR}/io/async/test/SSLUtil.cpp
         ${FOLLY_DIR}/io/async/test/SSLUtil.h
-        ${FOLLY_DIR}/io/async/test/TestSSLServer.cpp
-        ${FOLLY_DIR}/io/async/test/TestSSLServer.h
+        ${FOLLY_DIR}/io/async/testing/TestSSLServer.cpp
+        ${FOLLY_DIR}/io/async/testing/TestSSLServer.h
     )
   endif ()
   apply_folly_compile_options_to_target(folly_test_support)
@@ -1041,7 +1042,6 @@ if (BUILD_TESTS OR BUILD_BENCHMARKS)
     ApplyTupleTest.cpp
     TEST
     functional_invoke_test
-    WINDOWS_DISABLED
     SOURCES
     InvokeTest.cpp
     TEST
@@ -2001,11 +2001,6 @@ if (BUILD_TESTS OR BUILD_BENCHMARKS)
     spin_lock_test
     SOURCES
     SpinLockTest.cpp
-    BENCHMARK
-    string_benchmark
-    WINDOWS_DISABLED
-    SOURCES
-    StringBenchmark.cpp
     TEST
     string_test
     WINDOWS_DISABLED
@@ -2247,6 +2242,22 @@ if (BUILD_TESTS OR BUILD_BENCHMARKS)
     endif ()
   endif ()
 
+  # This compares against Boost's string algorithms.
+  if (TARGET Boost::headers)
+    folly_define_tests(
+      DIRECTORY
+      test/
+      BENCHMARK
+      string_benchmark
+      WINDOWS_DISABLED
+      SOURCES
+      StringBenchmark.cpp
+    )
+    if (TARGET string_benchmark)
+      target_link_libraries(string_benchmark PRIVATE Boost::headers)
+    endif ()
+  endif ()
+
   if (${LIBSODIUM_FOUND})
     folly_define_tests(
       DIRECTORY
@@ -2275,7 +2286,6 @@ if (BUILD_TESTS OR BUILD_BENCHMARKS)
       SOURCES
       AsyncIOTest.cpp
       AsyncBaseTestLib.cpp
-      IoTestTempFileUtil.cpp
     )
   endif ()
 

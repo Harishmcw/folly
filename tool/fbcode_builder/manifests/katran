@@ -3,6 +3,7 @@ name = katran
 fbsource_path = fbcode/katran
 shipit_project = katran
 shipit_fbcode_builder = true
+shipit_fbcode_builder_layout = tool
 
 [git]
 repo_url = https://github.com/facebookincubator/katran.git
@@ -14,21 +15,38 @@ builder = nop
 builder = cmake
 subdir = .
 
+# getdeps has never built the BPF programs, and its builders may lack clang.
+[cmake.defines]
+KATRAN_BUILD_BPF=OFF
+KATRAN_BUILD_KDE=ON
+
 [cmake.defines.test=on]
 BUILD_TESTS=ON
 
 [cmake.defines.test=off]
 BUILD_TESTS=OFF
 
+[debs]
+clang
+llvm
+
+[rpms]
+clang
+llvm
+
 [dependencies]
-folly
+bpftool
+CLI11
+fb303
+fbthrift
 fizz
+folly
+fmt
+googletest
 libbpf
 libmnl
+opentelemetry-cpp
 zlib
-googletest
-fmt
-CLI11
 
 [shipit.pathmap]
 fbcode/katran/public_root = .

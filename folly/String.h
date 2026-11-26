@@ -816,13 +816,10 @@ std::string join(
   return output;
 }
 
-template <
-    class Delim,
-    class Iterator,
-    typename std::enable_if<std::is_base_of<
-        std::forward_iterator_tag,
-        typename std::iterator_traits<Iterator>::iterator_category>::value>::
-        type* = nullptr>
+template <class Delim, class Iterator>
+  requires std::is_base_of_v<
+      std::forward_iterator_tag,
+      typename std::iterator_traits<Iterator>::iterator_category>
 std::string join(const Delim& delimiter, Iterator begin, Iterator end) {
   std::string output;
   join(delimiter, begin, end, output);
@@ -918,6 +915,40 @@ StringPiece trim(StringPiece sp, ToTrim toTrim) {
  * the level expected from context.
  */
 std::string stripLeftMargin(std::string s);
+
+/**
+ * Replace every non-overlapping occurrence of @from in @str with @to, scanning
+ * left to right. Replaced text is not searched again, so @to may contain
+ * @from. An empty @from leaves @str unchanged.
+ *
+ * @from and @to must not refer to characters inside @str.
+ *
+ * Runs in time linear in the size of @str and of the result.
+ *
+ * Works with any string type with std::string-like find, append and reserve,
+ * such as std::string and folly::fbstring.
+ */
+template <typename String>
+void string_replace_all(
+    String& str, std::string_view from, std::string_view to) {
+  if (from.empty()) {
+    return;
+  }
+  auto pos = str.find(from.data(), 0, from.size());
+  if (pos == String::npos) {
+    return;
+  }
+  String out;
+  out.reserve(str.size());
+  size_t prev = 0;
+  for (; pos != String::npos; pos = str.find(from.data(), prev, from.size())) {
+    out.append(str.data() + prev, pos - prev);
+    out.append(to.data(), to.size());
+    prev = pos + from.size();
+  }
+  out.append(str.data() + prev, str.size() - prev);
+  str = std::move(out);
+}
 
 /**
  * Convert ascii to lowercase, in-place.

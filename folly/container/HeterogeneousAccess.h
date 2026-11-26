@@ -27,6 +27,7 @@
 #include <folly/hash/Hash.h>
 #include <folly/hash/detail/RandomSeed.h>
 #include <folly/hash/rapidhash.h>
+#include <folly/lang/Memory.h>
 
 namespace folly {
 
@@ -110,6 +111,27 @@ struct TransparentRangeEqualTo {
   }
 };
 
+template <>
+struct TransparentRangeEqualTo<char> {
+  using is_transparent = void;
+
+  template <typename TOtherHash>
+  using is_compatible =
+      std::is_base_of<detail::TransparentRangeEqualTo<char>, TOtherHash>;
+
+  template <typename U1, typename U2>
+  bool operator()(U1 const& lhs, U2 const& rhs) const {
+    StringPiece l{lhs};
+    StringPiece r{rhs};
+    return l.size() == r.size() && memeq(l.data(), r.data(), l.size());
+  }
+
+  bool operator()(std::string const& lhs, std::string const& rhs) const {
+    return lhs.size() == rhs.size() &&
+        memeq(lhs.data(), rhs.data(), lhs.size());
+  }
+};
+
 template <typename T>
 struct TransparentRangeHash {
   using is_transparent = void;
@@ -176,17 +198,15 @@ struct HasCompatibleTest<
 } // namespace detail
 
 template <typename T>
-struct HeterogeneousAccessEqualTo<
-    T,
-    std::enable_if_t<detail::TransparentlyConvertibleToRange<T>::value>>
+  requires detail::TransparentlyConvertibleToRange<T>::value
+struct HeterogeneousAccessEqualTo<T, void>
     : detail::TransparentRangeEqualTo<
           typename detail::ValueTypeForTransparentConversionToRange<T>::type> {
 };
 
 template <typename T>
-struct HeterogeneousAccessHash<
-    T,
-    std::enable_if_t<detail::TransparentlyConvertibleToRange<T>::value>>
+  requires detail::TransparentlyConvertibleToRange<T>::value
+struct HeterogeneousAccessHash<T, void>
     : detail::TransparentRangeHash<
           typename detail::ValueTypeForTransparentConversionToRange<T>::type> {
 };
@@ -195,32 +215,26 @@ template <typename Hash1, typename Hash2, typename Enable = void>
 struct HeterogeneousPreHashCompatible : std::is_same<Hash1, Hash2> {};
 
 template <typename Hash1, typename Hash2>
-struct HeterogeneousPreHashCompatible<
-    Hash1,
-    Hash2,
-    std::enable_if_t<
-        detail::HasCompatibleTest<Hash1, Hash2>::value &&
-        detail::HasCompatibleTest<Hash2, Hash1>::value>>
+  requires(
+      detail::HasCompatibleTest<Hash1, Hash2>::value &&
+      detail::HasCompatibleTest<Hash2, Hash1>::value)
+struct HeterogeneousPreHashCompatible<Hash1, Hash2, void>
     : std::disjunction<
           typename Hash1::template is_compatible<Hash2>,
           typename Hash2::template is_compatible<Hash1>> {};
 
 template <typename Hash1, typename Hash2>
-struct HeterogeneousPreHashCompatible<
-    Hash1,
-    Hash2,
-    std::enable_if_t<
-        detail::HasCompatibleTest<Hash1, Hash2>::value &&
-        !detail::HasCompatibleTest<Hash2, Hash1>::value>>
+  requires(
+      detail::HasCompatibleTest<Hash1, Hash2>::value &&
+      !detail::HasCompatibleTest<Hash2, Hash1>::value)
+struct HeterogeneousPreHashCompatible<Hash1, Hash2, void>
     : Hash1::template is_compatible<Hash2> {};
 
 template <typename Hash1, typename Hash2>
-struct HeterogeneousPreHashCompatible<
-    Hash1,
-    Hash2,
-    std::enable_if_t<
-        !detail::HasCompatibleTest<Hash1, Hash2>::value &&
-        detail::HasCompatibleTest<Hash2, Hash1>::value>>
+  requires(
+      !detail::HasCompatibleTest<Hash1, Hash2>::value &&
+      detail::HasCompatibleTest<Hash2, Hash1>::value)
+struct HeterogeneousPreHashCompatible<Hash1, Hash2, void>
     : Hash2::template is_compatible<Hash1> {};
 
 } // namespace folly
