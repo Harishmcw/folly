@@ -91,6 +91,7 @@ folly_add_library(
     Benchmark.h
     detail/BenchmarkAdaptive.h
   DEPS
+    fmt::fmt
     folly_detail_perf_scoped
     folly_file_util
     folly_json_dynamic
@@ -120,6 +121,7 @@ folly_add_library(
   DEPS
     fmt::fmt
     folly_lang_align
+    folly_lang_exception
     folly_portability_sched
     folly_portability_windows
     folly_system_arch_x86
@@ -469,10 +471,10 @@ folly_add_library(
   HEADERS File.h
   DEPS
     ${GLOG_LIBRARIES}
+    fmt::fmt
     folly_exception
     folly_file_util
     folly_portability_filesystem
-    folly_portability_fmt_compile
     folly_portability_sys_file
     folly_scope_guard
   EXPORTED_DEPS
@@ -540,7 +542,6 @@ if (FOLLY_HAVE_OPENSSL)
       fmt::fmt
       folly_cpp_attributes
       folly_lang_exception
-      folly_portability_fmt_compile
   )
 else ()
   folly_exclude_headers(FmtUtility.h)
@@ -631,11 +632,6 @@ folly_add_library(
 folly_add_library(
   NAME json
   EXPORTED_DEPS folly_dynamic
-)
-
-folly_add_library(
-  NAME json_mock_util
-  EXPORTED_DEPS folly_json_json_mock_util
 )
 
 folly_add_library(
@@ -932,6 +928,12 @@ folly_add_library(
     folly_traits
     folly_utility
 )
+if (MSVC)
+  target_compile_options(
+    folly_optional
+    INTERFACE /wd4018
+  )
+endif ()
 
 folly_add_library(
   NAME overload
@@ -1003,6 +1005,7 @@ folly_add_library(
   EXPORTED_DEPS
     folly_concurrency_cache_locality
     folly_lang_bits
+    folly_lang_new
 )
 
 folly_add_library(
@@ -1067,7 +1070,6 @@ folly_add_library(
   HEADERS ScopeGuard.h
   EXPORTED_DEPS
     folly_lang_exception
-    folly_lang_uncaught_exceptions
     folly_portability
     folly_preprocessor
     folly_utility
@@ -1110,7 +1112,6 @@ folly_add_library(
     Singleton-inl.h
     Singleton.h
   DEPS
-    folly_portability_fmt_compile
     folly_system_at_fork
     ${FOLLY_SINGLETON_SELECT_DEPS}
   EXPORTED_DEPS
@@ -1129,6 +1130,12 @@ folly_add_library(
     folly_synchronization_baton
     folly_synchronized
 )
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  target_compile_options(
+    folly_singleton_obj
+    PRIVATE -Wno-invalid-noreturn
+  )
+endif ()
 
 folly_add_library(
   NAME singleton_thread_local
@@ -1253,13 +1260,6 @@ folly_add_library(
   NAME synchronized_ptr
   HEADERS SynchronizedPtr.h
   EXPORTED_DEPS folly_synchronized
-)
-
-folly_add_library(
-  NAME test_socket_address_test_helper
-  SRCS test/SocketAddressTestHelper.cpp
-  HEADERS test/SocketAddressTestHelper.h
-  DEPS folly_net_tcpinfo_dispatcher
 )
 
 folly_add_library(

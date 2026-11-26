@@ -108,6 +108,7 @@ folly_add_library(
   EXPORTED_DEPS
     folly_c_portability
     folly_likely
+    folly_traits
 )
 
 folly_add_library(
@@ -123,9 +124,7 @@ folly_add_library(
 folly_add_library(
   NAME customization_point
   HEADERS CustomizationPoint.h
-  EXPORTED_DEPS
-    folly_lang_static_const
-    folly_portability
+  EXPORTED_DEPS folly_portability
 )
 
 folly_add_library(
@@ -171,6 +170,14 @@ folly_add_library(
   EXPORTED_DEPS
     folly_c_portability
     folly_cpp_attributes
+)
+
+folly_add_library(
+  NAME memory
+  HEADERS Memory.h
+  EXPORTED_DEPS
+    folly_c_portability
+    folly_lang_bits
 )
 
 folly_add_library(
@@ -266,12 +273,6 @@ folly_add_library(
 )
 
 folly_add_library(
-  NAME static_const
-  HEADERS StaticConst.h
-  EXPORTED_DEPS folly_portability
-)
-
-folly_add_library(
   NAME strong
   HEADERS Strong.h
   EXPORTED_DEPS fmt::fmt
@@ -315,8 +316,6 @@ folly_add_library(
 
 folly_add_library(
   NAME uncaught_exceptions
-  SRCS UncaughtExceptions.cpp
-  HEADERS UncaughtExceptions.h
   EXPORTED_DEPS folly_lang_exception
 )
 

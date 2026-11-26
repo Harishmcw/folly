@@ -766,7 +766,7 @@ std::exception_ptr make_exception_ptr_with_(
   auto exception = static_cast<abi::__cxa_refcounted_exception*>(object) - 1;
   exception->referenceCount = 1;
   return catch_current_exception_([&] {
-    scope_guard_ rollback{std::bind(abi::__cxa_free_exception, object)};
+    scope_guard_ rollback{[object] { abi::__cxa_free_exception(object); }};
     arg.ctor(object, func);
     rollback.dismiss();
     return make_exception_ptr_from_rep_(object);
@@ -815,7 +815,7 @@ std::exception_ptr make_exception_ptr_with_(
   });
 #endif
   return catch_current_exception_([&] {
-    scope_guard_ rollback{std::bind(abi::__cxa_free_exception, object)};
+    scope_guard_ rollback{[object] { abi::__cxa_free_exception(object); }};
     arg.ctor(object, func);
     rollback.dismiss();
     return make_exception_ptr_from_rep_(object);
@@ -910,8 +910,6 @@ exception_shared_string& exception_shared_string::operator=(
   return *this;
 }
 
-#if !defined(__NVCC__)
-
 exception_shared_string& exception_shared_string::operator=(
     exception_shared_string&& that) noexcept {
   if (this != &that) {
@@ -922,8 +920,6 @@ exception_shared_string& exception_shared_string::operator=(
   }
   return *this;
 }
-
-#endif
 
 void exception_shared_string::ruin_state() noexcept {
   state::ruin(to_state(tagged_what_));

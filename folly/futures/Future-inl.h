@@ -213,9 +213,8 @@ FutureBase<T>::FutureBase(T2&& val)
 
 template <class T>
 template <typename T2>
-FutureBase<T>::FutureBase(
-    typename std::enable_if<std::is_same<Unit, T2>::value>::type*)
-    : core_(Core::make(Try<T>(T()))) {}
+  requires std::is_same_v<Unit, T2>
+FutureBase<T>::FutureBase(void*) : core_(Core::make(Try<T>(T()))) {}
 
 template <class T>
 void FutureBase<T>::assign(FutureBase<T>&& other) noexcept {
@@ -599,14 +598,6 @@ template <class T, class E>
   requires std::is_base_of_v<std::exception, decay_t<E>>
 SemiFuture<T> makeSemiFuture(E&& e) {
   return makeSemiFuture(Try<T>(make_exception_wrapper<E>(std::forward<E>(e))));
-}
-
-// DEPRECATED const-ref overload for users who EXPLICITLY specify BOTH template
-// parameters
-template <class T, class E>
-  requires std::is_base_of_v<std::exception, E>
-SemiFuture<T> makeSemiFuture(const std::type_identity_t<E>& e) {
-  return makeSemiFuture(Try<T>(make_exception_wrapper<E>(e)));
 }
 
 template <class T>
@@ -1281,14 +1272,6 @@ template <class T, class E>
   requires std::is_base_of_v<std::exception, decay_t<E>>
 Future<T> makeFuture(E&& e) {
   return makeFuture(Try<T>(make_exception_wrapper<E>(std::forward<E>(e))));
-}
-
-// DEPRECATED const-ref overload for users who EXPLICITLY specify BOTH template
-// parameters
-template <class T, class E>
-  requires std::is_base_of_v<std::exception, E>
-Future<T> makeFuture(const std::type_identity_t<E>& e) {
-  return makeFuture(Try<T>(make_exception_wrapper<E>(e)));
 }
 
 template <class T>

@@ -73,6 +73,29 @@ fb_dirsync_cpp_unittest(
     deps = [
         "fbsource//third-party/glog:glog",
         "//folly:portability",
+        "//folly:traits",
+        "//folly/concurrency:atomic_shared_ptr",
+        "//folly/portability:config",
+        "//folly/portability:gflags",
+        "//folly/portability:gtest",
+        "//folly/test:deterministic_schedule",
+        "//xplat/folly/synchronization/detail:atomic_utils",
+    ],
+)
+
+fb_dirsync_cpp_unittest(
+    name = "atomic_shared_ptr_no_cx16_test",
+    srcs = ["AtomicSharedPtrTest.cpp"],
+    headers = ["AtomicSharedPtrCounted.h"],
+    compiler_flags = select({
+        "DEFAULT": [],
+        "ovr_config//cpu:x86_64": ["-mno-cx16"],
+    }),
+    labels = ["case-isolation-failure"],
+    deps = [
+        "fbsource//third-party/glog:glog",
+        "//folly:portability",
+        "//folly:traits",
         "//folly/concurrency:atomic_shared_ptr",
         "//folly/portability:config",
         "//folly/portability:gflags",
@@ -157,7 +180,7 @@ fb_dirsync_cpp_unittest(
     deps = [
         "//folly:traits",
         "//folly/concurrency:concurrent_hash_map",
-        "//folly/container/test:tracking_types",
+        "//folly/container/testing:tracking_types",
         "//folly/hash:hash",
         "//folly/portability:gflags",
         "//folly/portability:gtest",
@@ -198,7 +221,7 @@ fb_dirsync_cpp_unittest(
     deps = [
         "//folly:traits",
         "//folly/concurrency:concurrent_hash_map",
-        "//folly/container/test:tracking_types",
+        "//folly/container/testing:tracking_types",
         "//folly/hash:hash",
         "//folly/portability:gflags",
         "//folly/portability:gtest",

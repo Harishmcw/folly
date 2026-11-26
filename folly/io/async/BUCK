@@ -16,6 +16,7 @@ fb_dirsync_cpp_library(
     srcs = [
         "AsyncTimeout.cpp",
         "EventBase.cpp",
+        "EventBaseAtomicNotificationQueue.cpp",
         "EventBaseBackendBase.cpp",
         "EventBaseLocal.cpp",
         "EventHandler.cpp",
@@ -453,6 +454,7 @@ fb_dirsync_cpp_library(
     deps = [
         "//folly:demangle",
         "//folly:glog",
+        "//folly:indestructible",
         "//folly:scope_guard",
         "//folly:utility",
         "//folly/concurrency/container:single_writer_fixed_hash_map",
@@ -770,12 +772,16 @@ fb_dirsync_cpp_library(
     modular_headers = False,
     use_raw_headers = True,
     deps = [
+        "//folly:conv",
         "//folly:file_util",
         "//folly:intrusive_list",
         "//folly:map_util",
         "//folly:string",
+        "//folly/lang:exception",
+        "//folly/system:pid",
     ],
     exported_deps = [
+        "//folly/container:f14_hash",
         "//folly/container:intrusive_heap",
         "//folly/io/async:async_base",
     ],
@@ -911,6 +917,7 @@ fb_dirsync_cpp_library(
     use_raw_headers = True,
     deps = [
         "//folly:conv",
+        "//folly:scope_guard",
         "//folly:string",
         "//folly/lang:align",
         "//folly/portability:sys_mman",
@@ -938,15 +945,14 @@ fb_dirsync_cpp_library(
     deps = [
         "//folly:conv",
         "//folly:string",
-        "//folly/lang:align",
         "//folly/portability:sys_mman",
     ],
     exported_deps = [
         ":delayed_destruction",
         ":liburing",
-        "//folly/concurrency/memory:tl_ref_count",
         "//folly/container:intrusive_list",
         "//folly/io:iobuf",
+        "//folly/lang:align",
     ],
 )
 
@@ -987,6 +993,7 @@ fb_dirsync_cpp_library(
     ],
     exported_deps = [
         ":liburing",
+        "//folly:file",
         "//folly/io:iobuf",
     ],
 )

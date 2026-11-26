@@ -32,6 +32,7 @@
 #include <mutex>
 #include <string>
 #include <fmt/chrono.h>
+#include <fmt/compile.h>
 #include <fmt/format.h>
 
 #include <folly/Demangle.h>
@@ -39,7 +40,6 @@
 #include <folly/debugging/symbolizer/Symbolizer.h>
 #include <folly/lang/SafeAssert.h>
 #include <folly/portability/Config.h>
-#include <folly/portability/FmtCompile.h>
 #include <folly/system/AtFork.h>
 // Before registrationComplete() we cannot assume that glog has been
 // initialized, so we need to use RAW_LOG for any message that may be logged
@@ -256,7 +256,7 @@ void singletonPrintDestructionStackTrace(const TypeDescriptor& type) {
 
 [[noreturn]] void singletonThrowNullCreator(const std::type_info& type) {
   auto const msg = fmt::format(
-      FOLLY_FMT_COMPILE(
+      FMT_COMPILE(
           "nullptr_t should be passed if you want {} to be default constructed"),
       folly::StringPiece(demangle(type)));
   throw std::logic_error(msg);
@@ -583,7 +583,19 @@ void SingletonVault::startShutdownTimer() {
   sig.sigev_value.sival_ptr = this;
   sig.sigev_notify_attributes = nullptr;
   timer_t timerId = nullptr;
-  PCHECK(timer_create(CLOCK_MONOTONIC, &sig, &timerId) == 0);
+  // glibc starts its SIGEV_THREAD helper thread without ASan's interceptor.
+  lsan_disable();
+  int created = timer_create(CLOCK_MONOTONIC, &sig, &timerId);
+  lsan_enable();
+  if (created != 0) {
+    // Under thread exhaustion glibc cannot start the SIGEV_THREAD thread; a
+    // signal timer needs none.
+    PLOG(WARNING) << "Singleton shutdown timer falls back to SIGABRT";
+    sig.sigev_notify = SIGEV_SIGNAL;
+    sig.sigev_signo = SIGABRT;
+    created = timer_create(CLOCK_MONOTONIC, &sig, &timerId);
+  }
+  PCHECK(created == 0);
 
   struct itimerspec newValue, oldValue;
   newValue.it_value.tv_sec =

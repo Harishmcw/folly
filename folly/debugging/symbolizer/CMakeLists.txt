@@ -35,6 +35,7 @@ folly_add_library(
     folly_portability_config
     folly_portability_unistd
     folly_scope_guard
+    folly_utility
   EXPORTED_DEPS
     folly_debugging_symbolizer_detail_dwarf_constants
     folly_debugging_symbolizer_dwarf_cursor
@@ -171,6 +172,7 @@ folly_add_library(
     folly_ext_backtrace
     folly_file_util
     folly_indestructible
+    folly_lang_hint
     folly_lang_safe_assert
     folly_lang_to_ascii
     folly_memory

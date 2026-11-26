@@ -169,8 +169,8 @@ class FutureBase {
   /// - `isReady() == true`
   /// - `hasValue() == true`
   template <class T2 = T>
-  /* implicit */ FutureBase(
-      typename std::enable_if<std::is_same<Unit, T2>::value>::type*);
+    requires std::is_same_v<Unit, T2>
+  /* implicit */ FutureBase(void*);
 
   template <class... Args>
     requires std::is_constructible_v<T, Args&&...>
@@ -556,9 +556,8 @@ class SemiFuture : private futures::detail::FutureBase<T> {
   /// - `isReady() == true`
   /// - `hasValue() == true`
   template <class T2 = T>
-  /* implicit */ SemiFuture(
-      typename std::enable_if<std::is_same<Unit, T2>::value>::type* p = nullptr)
-      : Base(p) {}
+    requires std::is_same_v<Unit, T2>
+  /* implicit */ SemiFuture(void* p = nullptr) : Base(p) {}
 
   /// Construct a SemiFuture from a `T` constructed from `args`
   ///
@@ -1083,9 +1082,8 @@ class Future : private futures::detail::FutureBase<T> {
   /// - `isReady() == true`
   /// - `hasValue() == true`
   template <class T2 = T>
-  /* implicit */ Future(
-      typename std::enable_if<std::is_same<Unit, T2>::value>::type* p = nullptr)
-      : Base(p) {}
+    requires std::is_same_v<Unit, T2>
+  /* implicit */ Future(void* p = nullptr) : Base(p) {}
 
   /// Construct a Future from a `T` constructed from `args`
   ///
@@ -1997,11 +1995,6 @@ namespace futures {
 /// needed. If your program never uses any timeouts or other time-based
 /// Futures you will pay no Timekeeper thread overhead.
 SemiFuture<Unit> sleep(HighResDuration, Timekeeper* = nullptr);
-[[deprecated(
-    "futures::sleep now returns a SemiFuture<Unit>. "
-    "sleepUnsafe is deprecated. "
-    "Please call futures::sleep and apply an executor with .via")]] Future<Unit>
-sleepUnsafe(HighResDuration, Timekeeper* = nullptr);
 
 /**
  * Set func as the callback for each input Future and return a vector of
@@ -2171,17 +2164,6 @@ template <class T, class E>
   requires std::is_base_of_v<std::exception, decay_t<E>>
 SemiFuture<T> makeSemiFuture(E&& e);
 
-/** Make a SemiFuture from an exception type E that can be passed to
-  std::make_exception_ptr().
-  NOTE: This is a deprecated const-ref overload for users who explicitly specify
-  both template parameters. Please leave exception type deduction to the
-  compiler.
- */
-template <class T, class E>
-  requires std::is_base_of_v<std::exception, E>
-[[deprecated("do not specify exception type template parameter explicitly")]]
-SemiFuture<T> makeSemiFuture(const std::type_identity_t<E>& e);
-
 /** Make a Future out of a Try */
 template <class T>
 SemiFuture<T> makeSemiFuture(Try<T> t);
@@ -2268,17 +2250,6 @@ Future<T> makeFuture(exception_wrapper ew);
 template <class T, class E>
   requires std::is_base_of_v<std::exception, decay_t<E>>
 Future<T> makeFuture(E&& e);
-
-/** Make a Future from an exception type E that can be passed to
-  std::make_exception_ptr().
-  NOTE: This is a deprecated const-ref overload for users who explicitly specify
-  both template parameters. Please leave exception type deduction to the
-  compiler.
- */
-template <class T, class E>
-  requires std::is_base_of_v<std::exception, E>
-[[deprecated("do not specify exception type template parameter explicitly")]]
-Future<T> makeFuture(const std::type_identity_t<E>& e);
 
 /**
   Make a Future out of a Try

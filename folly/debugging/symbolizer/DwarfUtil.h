@@ -72,14 +72,17 @@ struct CompilationUnit {
   DebugSections debugSections;
 
   bool is64Bit = false;
+  // In a .dwp this can differ from is64Bit (llvm-dwp
+  // --dwarf64-str-offsets-promotion).
+  bool strOffsetsIs64Bit = false;
   uint8_t version = 0;
   uint8_t unitType = DW_UT_compile;
   uint8_t addrSize = 0;
   // Offset in .debug_info of this compilation unit.
-  uint32_t offset = 0;
+  uint64_t offset = 0;
   uint32_t size = 0;
   // Offset in .debug_info for the first DIE in this compilation unit.
-  uint32_t firstDie = 0;
+  uint64_t firstDie = 0;
   folly::Optional<uint64_t> abbrevOffset;
 
   // Compilation directory.
@@ -116,7 +119,7 @@ struct CompilationUnitHeader {
   uint8_t version = 0;
   uint8_t unitType = DW_UT_compile;
   uint8_t addrSize = 0;
-  uint32_t firstDie = 0;
+  uint64_t firstDie = 0;
   uint64_t abbrevOffset = 0;
   folly::Optional<uint64_t> dwoId;
 };
@@ -144,7 +147,7 @@ struct Die {
   // Offset from start to first attribute
   uint8_t attrOffset = 0;
   // Offset within debug info.
-  uint32_t offset = 0;
+  uint64_t offset = 0;
   uint64_t code = 0;
   DIEAbbreviation abbr;
 };
@@ -169,39 +172,6 @@ struct Attribute {
 // Get an ELF section by name.
 std::span<const uint8_t> getElfSection(const ElfFile* elf, const char* name);
 
-// Span-based read* functions advance their input and abort if there is not
-// enough room. DwarfCursor overloads return structured errors instead.
-
-// Read (bitwise) one object of type T
-template <class T>
-  requires(std::is_standard_layout_v<T> && std::is_trivial_v<T>)
-T read(std::span<const uint8_t>& bytes) {
-  FOLLY_SAFE_CHECK(bytes.size() >= sizeof(T), "underflow");
-  T x;
-  memcpy(&x, bytes.data(), sizeof(T));
-  bytes = bytes.subspan(sizeof(T));
-  return x;
-}
-
-// Read (bitwise) an unsigned number of N bytes (N in 1, 2, 3, 4).
-template <size_t N>
-uint64_t readU64(std::span<const uint8_t>& bytes);
-
-// Read ULEB (unsigned) varint value; algorithm from the DWARF spec
-uint64_t readULEB(
-    std::span<const uint8_t>& bytes, uint8_t& shift, uint8_t& val);
-uint64_t readULEB(std::span<const uint8_t>& bytes);
-
-// Read SLEB (signed) varint value; algorithm from the DWARF spec
-int64_t readSLEB(std::span<const uint8_t>& bytes);
-
-// Read a value of "section offset" type, which may be 4 or 8 bytes
-uint64_t readOffset(std::span<const uint8_t>& bytes, bool is64Bit);
-
-// Read "len" bytes
-std::span<const uint8_t> readBytes(
-    std::span<const uint8_t>& bytes, uint64_t len);
-
 DwarfParseResult<folly::Optional<AttributeSpec>> readAttributeSpec(
     DwarfCursor& cursor);
 
@@ -210,12 +180,6 @@ DwarfParseResult<folly::Optional<AttributeSpec>> readAttributeSpec(
 DwarfParseResult<folly::Optional<DIEAbbreviation>> readAbbreviation(
     DwarfCursor& cursor);
 
-// Read a null-terminated string
-folly::StringPiece readNullTerminated(std::span<const uint8_t>& bytes);
-
-folly::StringPiece getStringFromStringSection(
-    std::span<const uint8_t> bytes, uint64_t offset);
-
 DwarfParseResult<CompilationUnitHeader> parseCompilationUnitHeader(
     std::span<const uint8_t> debugInfo, size_t offset);
 
@@ -223,6 +187,14 @@ DwarfParseResult<CompilationUnitHeader> parseCompilationUnitHeader(
 // result means that no matching, usable entry was found.
 DwarfParseResult<bool> findDwpCompilationUnit(
     std::span<const uint8_t> debugCuIndex, uint64_t dwoId, CompilationUnit& cu);
+
+// Parse the split unit for dwoId at the offset from findDwpCompilationUnit,
+// which llvm-dwp --continue-on-cu-index-overflow may have truncated to 32 bits.
+bool parseDwpCompilationUnit(CompilationUnit& cu, uint64_t dwoId);
+
+// Advance cu.strOffsetsBase from the start of its .dwp contribution to the
+// first entry, taking the offset size from the contribution's own header.
+void setDwpStrOffsetsBase(CompilationUnit& cu);
 
 CompilationUnits getCompilationUnits(
     ElfCacheBase* elfCache,
@@ -249,6 +221,12 @@ DwarfParseResult<folly::Optional<size_t>> forEachAttribute(
     const CompilationUnit& cu,
     const Die& die,
     folly::FunctionRef<bool(const Attribute&)> f);
+
+DwarfParseResult<bool> isAddressInRangeList(
+    const CompilationUnit& cu,
+    uint64_t address,
+    folly::Optional<uint64_t> baseAddress,
+    uint64_t offset);
 
 template <class T>
 DwarfParseResult<folly::Optional<T>> getAttribute(

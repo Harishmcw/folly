@@ -16,24 +16,35 @@
 
 #pragma once
 
-#include <glog/logging.h>
+#include <condition_variable>
+#include <queue>
+#include <thread>
 
-#include <folly/io/FsUtil.h>
-#include <folly/testing/TestUtil.h>
+#include <folly/Executor.h>
 
-namespace folly {
-namespace test {
+namespace folly::test {
 
-class TempFileUtil {
+/**
+ * A simple multithreaded executor for use in tests etc
+ */
+class SimpleThreadPoolExecutor : public Executor {
  public:
-  // Returns a temporary file that is NOT kept open
-  // but is deleted on destruction
-  // Generate random-looking but reproduceable data.
-  static TemporaryFile getTempFile(size_t size);
+  explicit SimpleThreadPoolExecutor(size_t numThreads);
+
+  ~SimpleThreadPoolExecutor() override;
+
+  void add(Func f) override;
+
+  size_t numThreads() const;
 
  private:
-  TempFileUtil() = delete;
+  void addImpl(Func f);
+
+  std::mutex m_;
+  std::queue<Func> workItems_;
+  std::condition_variable cv_;
+
+  std::vector<std::thread> workers_;
 };
 
-} // namespace test
-} // namespace folly
+} // namespace folly::test

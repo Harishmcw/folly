@@ -394,7 +394,6 @@ class IoUringBackend : public EventBaseBackendBase {
     bool err_{false};
     io_uring& ioRing_;
     std::vector<int> files_;
-    uint32_t inUse_;
     std::vector<IoUringFdRegistrationRecord> records_;
     IoUringFdRegistrationRecord::FreeList free_;
   };
@@ -402,10 +401,14 @@ class IoUringBackend : public EventBaseBackendBase {
   struct IoSqe : public IoSqeBase {
     using BackendCb = void(IoUringBackend*, IoSqe*, const io_uring_cqe*);
     explicit IoSqe(
-        IoUringBackend* backend = nullptr,
+        IoUringBackend* backend,
+        BackendCb* backendCb,
         bool poolAlloc = false,
         bool persist = false)
-        : backend_(backend), poolAlloc_(poolAlloc), persist_(persist) {}
+        : backend_(backend),
+          backendCb_(backendCb),
+          poolAlloc_(poolAlloc),
+          persist_(persist) {}
 
     void callback(const io_uring_cqe* cqe) noexcept override {
       backendCb_(backend_, this, cqe);
@@ -414,14 +417,12 @@ class IoUringBackend : public EventBaseBackendBase {
     virtual void release() noexcept;
 
     IoUringBackend* backend_;
-    BackendCb* backendCb_{nullptr};
+    BackendCb* backendCb_;
     const bool poolAlloc_;
     const bool persist_;
     Event* event_{nullptr};
-    IoUringFdRegistrationRecord* fdRecord_{nullptr};
     size_t useCount_{0};
     int res_;
-    uint32_t cqeFlags_;
 
     FOLLY_ALWAYS_INLINE void resetEvent() {
       // remove it from the list
@@ -446,66 +447,6 @@ class IoUringBackend : public EventBaseBackendBase {
       ::io_uring_sqe_set_data(sqe, this);
     }
 
-    void prepRead(
-        io_uring_sqe* sqe,
-        int fd,
-        const iovec* iov,
-        off_t offset,
-        bool registerFd) noexcept {
-      prepUtilFunc(
-          ::io_uring_prep_read,
-          sqe,
-          registerFd,
-          fd,
-          iov->iov_base,
-          static_cast<unsigned int>(iov->iov_len),
-          offset);
-    }
-
-    void prepWrite(
-        io_uring_sqe* sqe,
-        int fd,
-        const iovec* iov,
-        off_t offset,
-        bool registerFd) noexcept {
-      prepUtilFunc(
-          ::io_uring_prep_write,
-          sqe,
-          registerFd,
-          fd,
-          iov->iov_base,
-          static_cast<unsigned int>(iov->iov_len),
-          offset);
-    }
-
-    template <typename Fn, typename... Args>
-    void prepUtilFunc(
-        Fn fn, io_uring_sqe* sqe, bool registerFd, int fd, Args... args) {
-      CHECK(sqe);
-      if (registerFd && !fdRecord_) {
-        fdRecord_ = backend_->registerFd(fd);
-      }
-
-      if (fdRecord_) {
-        fn(sqe, fdRecord_->idx_, std::forward<Args>(args)...);
-        sqe->flags |= IOSQE_FIXED_FILE;
-      } else {
-        fn(sqe, fd, std::forward<Args>(args)...);
-      }
-
-      ::io_uring_sqe_set_data(sqe, this);
-    }
-
-    void prepRecvmsgMultishot(io_uring_sqe* sqe, int fd, msghdr* msg) noexcept {
-      CHECK(sqe);
-      ::io_uring_prep_recvmsg_multishot(sqe, fd, msg, MSG_TRUNC);
-      if (auto* bp = backend_->bufferProvider()) {
-        sqe->buf_group = bp->gid();
-        sqe->flags |= IOSQE_BUFFER_SELECT;
-      }
-      ::io_uring_sqe_set_data(sqe, this);
-    }
-
     FOLLY_ALWAYS_INLINE void prepCancel(io_uring_sqe* sqe, IoSqe* cancel_sqe) {
       CHECK(sqe);
       ::io_uring_prep_cancel(sqe, cancel_sqe, 0);
@@ -517,7 +458,7 @@ class IoUringBackend : public EventBaseBackendBase {
 
   struct FileOpIoSqe : public IoSqe {
     FileOpIoSqe(IoUringBackend* backend, int fd, FileOpCallback&& cb)
-        : IoSqe(backend, false), fd_(fd), cb_(std::move(cb)) {}
+        : IoSqe(backend, processFileOpCB), fd_(fd), cb_(std::move(cb)) {}
 
     void processActive() override { cb_(res_); }
 
@@ -553,7 +494,15 @@ class IoUringBackend : public EventBaseBackendBase {
     using ReadWriteIoSqe::ReadWriteIoSqe;
 
     void processSubmit(io_uring_sqe* sqe) noexcept override {
-      prepRead(sqe, fd_, iov_.data(), offset_, false);
+      CHECK(sqe);
+      const auto& iov = iov_.front();
+      ::io_uring_prep_read(
+          sqe,
+          fd_,
+          iov.iov_base,
+          static_cast<unsigned int>(iov.iov_len),
+          offset_);
+      ::io_uring_sqe_set_data(sqe, this);
     }
   };
 
@@ -561,7 +510,15 @@ class IoUringBackend : public EventBaseBackendBase {
     using ReadWriteIoSqe::ReadWriteIoSqe;
 
     void processSubmit(io_uring_sqe* sqe) noexcept override {
-      prepWrite(sqe, fd_, iov_.data(), offset_, false);
+      CHECK(sqe);
+      const auto& iov = iov_.front();
+      ::io_uring_prep_write(
+          sqe,
+          fd_,
+          iov.iov_base,
+          static_cast<unsigned int>(iov.iov_len),
+          offset_);
+      ::io_uring_sqe_set_data(sqe, this);
     }
   };
 
@@ -593,32 +550,20 @@ class IoUringBackend : public EventBaseBackendBase {
     }
   };
 
-  enum class FSyncFlags {
-    FLAGS_FSYNC = 0,
-    FLAGS_FDATASYNC = 1,
-  };
-
   struct FSyncIoSqe : public FileOpIoSqe {
     FSyncIoSqe(
-        IoUringBackend* backend, int fd, FSyncFlags flags, FileOpCallback&& cb)
+        IoUringBackend* backend,
+        int fd,
+        unsigned int flags,
+        FileOpCallback&& cb)
         : FileOpIoSqe(backend, fd, std::move(cb)), flags_(flags) {}
 
     void processSubmit(io_uring_sqe* sqe) noexcept override {
-      unsigned int fsyncFlags = 0;
-      switch (flags_) {
-        case FSyncFlags::FLAGS_FSYNC:
-          fsyncFlags = 0;
-          break;
-        case FSyncFlags::FLAGS_FDATASYNC:
-          fsyncFlags = IORING_FSYNC_DATASYNC;
-          break;
-      }
-
-      ::io_uring_prep_fsync(sqe, fd_, fsyncFlags);
+      ::io_uring_prep_fsync(sqe, fd_, flags_);
       ::io_uring_sqe_set_data(sqe, this);
     }
 
-    FSyncFlags flags_;
+    unsigned int flags_;
   };
 
   struct FOpenAtIoSqe : public FileOpIoSqe {
@@ -820,7 +765,7 @@ class IoUringBackend : public EventBaseBackendBase {
   int submitBusyCheck(uint32_t num, WaitForEventsMode waitForEvents) noexcept;
   int submitEager();
 
-  void queueFsync(int fd, FSyncFlags flags, FileOpCallback&& cb);
+  void queueFsync(int fd, unsigned int flags, FileOpCallback&& cb);
 
   void processFileOp(IoSqe* ioSqe, int res) noexcept;
 
@@ -839,11 +784,10 @@ class IoUringBackend : public EventBaseBackendBase {
   IoUringBackend::IoSqe* allocNewIoSqe() {
     // allow pool alloc if poolAllocRemaining_ > 0
     bool poolAlloc = poolAllocRemaining_ > 0;
-    auto* ret = new IoSqe(this, poolAlloc);
+    auto* ret = new IoSqe(this, processPollIoSqe, poolAlloc);
     if (poolAlloc) {
       --poolAllocRemaining_;
     }
-    ret->backendCb_ = IoUringBackend::processPollIoSqe;
 
     return ret;
   }
@@ -872,7 +816,6 @@ class IoUringBackend : public EventBaseBackendBase {
   void initSubmissionLinked();
 
   Options options_;
-  uint32_t numEntries_;
   std::unique_ptr<IoSqe> timerEntry_;
   std::unique_ptr<IoSqe> signalReadEntry_;
   // Holds only IoSqe objects.

@@ -22,6 +22,7 @@
 
 #include <folly/Demangle.h>
 #include <folly/GLog.h>
+#include <folly/Indestructible.h>
 #include <folly/ScopeGuard.h>
 #include <folly/Utility.h>
 #include <folly/concurrency/container/SingleWriterFixedHashMap.h>
@@ -515,6 +516,10 @@ RequestContext::State::getContextData(const RequestToken& token) const {
 
 FOLLY_ALWAYS_INLINE
 void RequestContext::State::onSet() {
+  // Skip acquiring a hazard pointer when there are no callbacks to protect
+  if (!combined_.load(std::memory_order_relaxed)) {
+    return;
+  }
   // Don't use hazptr_local because callback may use hazptr
   hazptr_holder<> h = make_hazard_pointer<>();
   Combined* combined = h.protect(combined_);
@@ -529,6 +534,10 @@ void RequestContext::State::onSet() {
 
 FOLLY_ALWAYS_INLINE
 void RequestContext::State::onUnset() {
+  // Skip acquiring a hazard pointer when there are no callbacks to protect
+  if (!combined_.load(std::memory_order_relaxed)) {
+    return;
+  }
   // Don't use hazptr_local because callback may use hazptr
   hazptr_holder<> h = make_hazard_pointer<>();
   Combined* combined = h.protect(combined_);
@@ -578,7 +587,7 @@ void RequestContext::State::clearContextData(const RequestToken& token) {
   DCHECK(data);
   data->releaseRefClearOnly();
   DCHECK(replaced);
-  replaced->cleared_.emplace_back(std::make_pair(token, data));
+  replaced->cleared_.emplace_back(token, data);
   replaced->retire();
 }
 
@@ -1084,9 +1093,9 @@ FOLLY_NOINLINE void RequestContext::restoreContextAfterPromotionFailure(
 
 /* static */ RequestContext::SetContextWatcherRegistry&
 RequestContext::getWatcherRegistry() {
-  static SetContextWatcherRegistry registry;
+  static Indestructible<SetContextWatcherRegistry> registry;
 
-  return registry;
+  return *registry;
 }
 
 /* static */ void RequestContext::addSetContextWatcher(

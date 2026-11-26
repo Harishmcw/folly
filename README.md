@@ -97,10 +97,11 @@ Folly is published on GitHub at https://github.com/meta/folly.
 Because folly does not provide any ABI compatibility guarantees from commit to
 commit, we generally recommend building folly as a static library.
 
-folly supports gcc, clang, or MSVC with C++20 support. It should run on Linux
-(x86-32, x86-64, and ARM), iOS, macOS, and Windows (x86-64). The CMake build is
-only tested on some of these platforms; at a minimum, we aim to support macOS
-and Linux (on the latest Ubuntu LTS release or newer.)
+folly requires C++20 and GCC 10, Clang 15 (or Apple clang 15), MSVC from Visual
+Studio 2019 16.11, or newer. It should run on Linux (x86-32, x86-64, and ARM),
+iOS, macOS, and Windows (x86-64). The CMake build is only tested on some of
+these platforms; at a minimum, we aim to support macOS and Linux (on the latest
+Ubuntu LTS release or newer.)
 
 ## Build with CMake
 
@@ -125,33 +126,24 @@ build them, which also fetches googletest and gflags if they are not installed
     cmake --build build
     (cd build && ctest)
 
-Whether folly uses gflags is decided when folly is built and recorded in the
-installed `folly/folly-config.h`; linking gflags into a program later does not
-turn it on. Without gflags, `folly::Init` does not parse command-line flags,
-`folly::gflags::FlagSaver` and `folly::gflags::SetCommandLineOption` do
-nothing, and the `cli` libraries are not built. Declare folly's flags with the
-`FOLLY_GFLAGS_DECLARE_*` macros from `folly/portability/GFlags.h`, not with
-gflags' `DECLARE_*`, which would not match how folly defined them: without
-gflags, for example, a string flag is a `std::string` rather than a reference.
+### Dependencies
 
-OpenSSL is optional too. Without it, the libraries that need it are not built
-or installed: `folly/ssl`, `AsyncSSLSocket`, `SSLContext`, `SSLOptions` and the
-rest of `folly/io/async/ssl`, as well as `FmtUtility`, `hash/UniqueHashKey` and
-`container/RegexMatchCache`, which hash with OpenSSL. `FOLLY_HAVE_OPENSSL` in
-the installed `folly/folly-config.h` says which way folly was built. To build
-OpenSSL from source when it is not installed, configure with
-`-DFOLLY_BUILD_OPENSSL=ON`, which is the default when folly is built as part
-of another project.
+folly has minimal required dependencies: [fmt](https://github.com/fmtlib/fmt),
+[glog](https://github.com/google/glog), [libevent](https://libevent.org/) and,
+without floating-point `std::from_chars`,
+[fast_float](https://github.com/fastfloat/fast_float). The CMake build fetches
+any that are missing.
 
-Boost.Regex is optional too. Without it, `json/JSONSchema` and
-`container/RegexMatchCache` are not built or installed, `EXPECT_PCRE_MATCH` and
-`EXPECT_NO_PCRE_MATCH` from `testing/TestUtil.h` are not available, and the
-tests that use any of them are left out. Downstream projects can check for
-`TARGET Folly::folly_testing_test_util_pcre` to see whether the PCRE helpers
-are available.
+Optional dependencies enable more features:
 
-fast_float is optional with a standard library that has floating-point
-`std::from_chars`, such as libstdc++ 11 or newer and libc++ 20 or newer.
+  * gflags: flag parsing in `folly::Init` and `cli`.
+  * OpenSSL: `folly/ssl` and `folly/io/async/ssl` (`-DFOLLY_BUILD_OPENSSL=ON`
+    builds it).
+  * Boost: `JSONSchema`, `RegexMatchCache`, `EXPECT_PCRE_MATCH` and
+    `cli/ProgramOptions` (`-DFOLLY_FETCH_BOOST=ON` fetches it;
+    `ProgramOptions` needs an installed Boost).
+  * Compression codecs (zlib, bzip2, LZMA, LZ4, zstd, Snappy), libsodium,
+    libunwind, libiberty, libaio and liburing.
 
 `cmake --install` needs CMake 3.28 or newer once anything has been fetched,
 because fetched dependencies are deliberately left out of what folly installs.
@@ -160,73 +152,31 @@ An installed folly expects its dependencies on the consumer's system instead;
 
 ## `getdeps.py`
 
-`getdeps.py` also builds folly's sibling projects. Prefer the CMake build above
-unless you need that.
+`getdeps.py` builds folly together with its dependencies at the versions
+Meta's OSS projects use, and also builds folly's sibling projects. Prefer the
+CMake build above unless you need that. It needs Python 3.10 or newer and works
+on Linux, macOS and Windows. folly's build settings are in its manifest,
+`tool/fbcode_builder/manifests/folly`.
 
-This script is used by many of Meta's OSS tools.  It will download and build all of the necessary dependencies first, and will then invoke cmake etc to build folly.  This will help ensure that you build with relevant versions of all of the dependent libraries, taking into account what versions are installed locally on your system.
+On Linux, or on macOS with Homebrew, install the system packages first to avoid
+building them (`--dry-run` lists them without installing):
 
-It's written in python so you'll need python3.6 or later on your PATH.  It works on Linux, macOS and Windows.
-
-The settings for folly's cmake build are held in its getdeps manifest `tool/fbcode_builder/manifests/folly`, which you can edit locally if desired.
-
-### Dependencies
-
-If on Linux or MacOS (with homebrew installed) you can install system dependencies to save building them:
-
-    # Clone the repo
-    git clone https://github.com/meta/folly
-    # Install dependencies
-    cd folly
     sudo tool/fbcode_builder/getdeps.py install-system-deps --recursive
 
-If you'd like to see the packages before installing them:
+Then build and test:
 
-    tool/fbcode_builder/getdeps.py install-system-deps --dry-run --recursive
-
-On other platforms or if on Linux and without system dependencies `getdeps.py` will mostly download and build them for you during the build step.
-
-Some of the dependencies `getdeps.py` uses and installs are:
-
-  * boost.
-  * googletest is required to build and run folly's tests.
-
-### Build
-
-    # Clone the repo
-    git clone https://github.com/meta/folly
-    cd folly
-    # Build, using system dependencies if available
     python3 tool/fbcode_builder/getdeps.py --allow-system-packages build
-
-It puts output in its scratch area:
-
-  * `installed/folly/lib/libfolly.a`: Library
-
-You can also specify a `--scratch-path` argument to control
-the location of the scratch directory used for the build. You can find the default scratch install location from logs or with `python3 tool/fbcode_builder/getdeps.py show-inst-dir`.
-
-There are also
-`--install-dir` and `--install-prefix` arguments to provide some more
-fine-grained control of the installation directories. However, given that
-folly provides no compatibility guarantees between commits we generally
-recommend building and installing the libraries to a temporary location, and
-then pointing your project's build at this temporary location, rather than
-installing folly in the traditional system installation directories. e.g., if you are building with CMake you can use the `CMAKE_PREFIX_PATH` variable to allow CMake to find folly in this temporary installation directory when
-building your project.
-
-### Run tests
-
-By default `getdeps.py` will build the tests for folly. To run them:
-
-    cd folly
     python3 tool/fbcode_builder/getdeps.py --allow-system-packages test
 
-### Iterating on a `getdeps.py` build
+The library ends up in `installed/folly/lib/libfolly.a` under the scratch
+directory, which `--scratch-path` sets and `getdeps.py show-inst-dir` prints.
+`--install-dir` and `--install-prefix` give finer control. Since folly makes no
+compatibility guarantees between commits, install it to a temporary location
+and point your project at it, for example with `CMAKE_PREFIX_PATH`, rather than
+installing it system-wide.
 
-To invoke `cmake` again against a build getdeps made, there is a helpful `run_cmake.py` script output in the scratch-path build directory. You can find the scratch build directory from logs or with `python3 tool/fbcode_builder/getdeps.py show-build-dir`.
-
-Running tests with ctests also works if you cd to the build dir, e.g.
-`(cd $(python3 tool/fbcode_builder/getdeps.py show-build-dir) && ctest)`
+To iterate, use the build directory that `getdeps.py show-build-dir` prints:
+its `run_cmake.py` reruns CMake, and `ctest` there runs the tests.
 
 ## Ubuntu LTS, CentOS Stream, Fedora
 

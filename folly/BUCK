@@ -103,6 +103,7 @@ fb_dirsync_cpp_library(
     deps = [
         "fbsource//third-party/fmt:fmt",
         "//folly/lang:align",
+        "//folly/lang:exception",
         "//folly/portability:sched",
         "//folly/portability:windows",
         "//folly/system/arch:x86",
@@ -126,6 +127,7 @@ fb_dirsync_cpp_library(
     ],
     use_raw_headers = True,
     deps = [
+        "fbsource//third-party/fmt:fmt",
         ":file_util",
         ":map_util",
         ":overload",
@@ -160,7 +162,6 @@ fb_dirsync_cpp_library(
         ":preprocessor",
         ":utility",
         "//folly/lang:exception",
-        "//folly/lang:uncaught_exceptions",
     ],
 )
 
@@ -255,11 +256,11 @@ fb_dirsync_cpp_library(
     headers = ["File.h"],
     use_raw_headers = True,
     deps = [
+        "fbsource//third-party/fmt:fmt",
         "fbsource//third-party/glog:glog",
         ":exception",
         ":file_util",
         ":scope_guard",
-        "//folly/portability:fmt_compile",
         "//folly/portability:sys_file",
     ] + select({
         "DEFAULT": ["//folly/portability:filesystem"],
@@ -593,17 +594,6 @@ fb_dirsync_cpp_library(
     use_raw_headers = True,
     exported_deps = [
         "//folly/json:json_test_util",
-    ],
-)
-
-fb_dirsync_cpp_library(
-    name = "json_mock_util",
-    exported_headers = {
-        "test/JsonMockUtil.h": "test/JsonMockUtil.h",
-    },
-    platforms = (CXX, ANDROID, APPLE, WINDOWS, FBCODE),
-    exported_deps = [
-        "//folly/json:json_mock_util",
     ],
 )
 
@@ -992,7 +982,6 @@ fb_dirsync_cpp_library(
         "fbsource//third-party/fmt:fmt",
         ":cpp_attributes",
         "//folly/lang:exception",
-        "//folly/portability:fmt_compile",
     ],
 )
 
@@ -1276,22 +1265,6 @@ fb_dirsync_cpp_library(
     ],
 )
 
-fb_dirsync_cpp_library(
-    name = "test_socket_address_test_helper",
-    srcs = [
-        "test/SocketAddressTestHelper.cpp",
-    ],
-    headers = [
-        "test/SocketAddressTestHelper.h",
-    ],
-    use_raw_headers = True,
-    xplat_impl = folly_xplat_library,
-    deps = [
-        "fbsource//xplat/folly/portability:sockets",
-        "//folly/net:tcpinfo_dispatcher",
-    ],
-)
-
 # Folly test targets
 non_fbcode_target(
     _kind = fb_xplat_cxx_library,
@@ -1306,8 +1279,8 @@ non_fbcode_target(
     visibility = ["PUBLIC"],
     deps = [
         ":memory",
-        "//xplat/folly/container/test:f14_test_util",
-        "//xplat/folly/container/test:tracking_types",
+        "//xplat/folly/container/testing:f14_test_util",
+        "//xplat/folly/container/testing:tracking_types",
         "//xplat/folly/synchronization/test:flat_combining_examples",
         "//xplat/folly/synchronization/test:flat_combining_test_helpers",
         "//xplat/folly/tracing/test:static_tracepoint_test_module",
@@ -1331,12 +1304,9 @@ non_fbcode_target(
     platforms = (ANDROID, APPLE, CXX, FBCODE, WINDOWS),
     visibility = ["PUBLIC"],
     deps = [
-        "//third-party/boost:boost",
-        "//third-party/boost:boost_regex",
         "//xplat/folly:memory",
     ],
     exported_deps = [
-        "fbsource//third-party/boost:boost",
         "fbsource//third-party/glog:glog",
         "fbsource//xplat/folly:atomic_hash_map",
         "fbsource//xplat/folly:atomic_linked_list",
@@ -1436,7 +1406,6 @@ non_fbcode_target(
         "fbsource//xplat/folly/lang:checked_math",
         "fbsource//xplat/folly/lang:exception",
         "fbsource//xplat/folly/lang:rvalue_reference_wrapper",
-        "fbsource//xplat/folly/lang:uncaught_exceptions",
         "fbsource//xplat/folly/logging:init",
         "fbsource//xplat/folly/logging:init_weak",
         "fbsource//xplat/folly/logging:log_handler",
@@ -1489,7 +1458,6 @@ non_fbcode_target(
         "fbsource//xplat/third-party/linker_lib:atomic",
         "fbsource//xplat/third-party/openssl:crypto",
         "fbsource//xplat/third-party/openssl:ssl",
-        "//third-party/boost:boost_system",
         "//xplat/folly:discriminated_ptr",
         "//xplat/folly:stop_watch",
         "//xplat/folly/detail:discriminated_ptr_detail",
@@ -1668,7 +1636,6 @@ non_fbcode_target(
         "fbsource//xplat/folly/lang:checked_math",
         "fbsource//xplat/folly/lang:exception",
         "fbsource//xplat/folly/lang:rvalue_reference_wrapper",
-        "fbsource//xplat/folly/lang:uncaught_exceptions",
         "fbsource//xplat/folly/logging:init",
         "fbsource//xplat/folly/logging:init_weak",
         "fbsource//xplat/folly/logging:log_handler",
@@ -1851,7 +1818,6 @@ non_fbcode_target(
         "fbsource//xplat/folly/lang:checked_math",
         "fbsource//xplat/folly/lang:exception",
         "fbsource//xplat/folly/lang:rvalue_reference_wrapper",
-        "fbsource//xplat/folly/lang:uncaught_exceptions",
         "fbsource//xplat/folly/logging:init",
         "fbsource//xplat/folly/logging:init_weak",
         "fbsource//xplat/folly/logging:log_handler",
@@ -2171,6 +2137,7 @@ fb_dirsync_cpp_library(
     exported_deps = [
         "//folly/concurrency:cache_locality",
         "//folly/lang:bits",
+        "//folly/lang:new",
     ],
 )
 
@@ -2622,7 +2589,6 @@ fb_dirsync_cpp_library(
     shared_under_folly_linkage = True,
     use_raw_headers = True,
     deps = [
-        "//folly/portability:fmt_compile",
         "//folly/system:at_fork",
     ]
     + select({
