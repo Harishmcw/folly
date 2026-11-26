@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <folly/io/async/test/AsyncSSLSocketTest.h>
+#include <folly/io/async/testing/AsyncSSLSocketTest.h>
 
 #include <fcntl.h>
 #include <signal.h>
@@ -35,13 +35,13 @@
 #include <folly/io/async/ScopedEventBaseThread.h>
 #include <folly/io/async/ssl/BasicTransportCertificate.h>
 #include <folly/io/async/ssl/OpenSSLTransportCertificate.h>
-#include <folly/io/async/test/BlockingSocket.h>
-#include <folly/io/async/test/MockAsyncSocketLegacyObserver.h>
 #include <folly/io/async/test/TFOUtil.h>
-#include <folly/io/async/test/TestSSLServer.h>
+#include <folly/io/async/testing/BlockingSocket.h>
+#include <folly/io/async/testing/MockAsyncSocketLegacyObserver.h>
+#include <folly/io/async/testing/TestSSLServer.h>
 #include <folly/net/NetOps.h>
 #include <folly/net/NetworkSocket.h>
-#include <folly/net/test/MockNetOpsDispatcher.h>
+#include <folly/net/testing/MockNetOpsDispatcher.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <folly/portability/OpenSSL.h>

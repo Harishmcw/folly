@@ -27,6 +27,7 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 
@@ -75,12 +76,31 @@ struct ElfFileId {
   ino_t inode;
   off_t size;
   uint64_t mtime;
+
+  friend bool operator==(const ElfFileId& lhs, const ElfFileId& rhs) = default;
 };
 
-inline bool operator==(const ElfFileId& lhs, const ElfFileId& rhs) {
-  return lhs.dev == rhs.dev && lhs.inode == rhs.inode && lhs.size == rhs.size &&
-      lhs.mtime == rhs.mtime;
-}
+namespace detail {
+
+/**
+ * True if any '/'-delimited segment of path is exactly "..".
+ *
+ * .gnu_debuglink names are attacker-controlled strings joined onto the
+ * executable's directory; callers use this to keep the joined lookup from
+ * escaping it. Names are stored verbatim by objcopy and in practice are
+ * often full paths rather than bare filenames, so this policy only screens
+ * relative escapes -- and is stricter than other consumers, which do not
+ * sanitize. The failure mode is graceful (the original file is used).
+ *
+ * Note: this is deliberately not applied to DW_AT_comp_dir/DW_AT_dwo_name.
+ * dwo_name is the compiler's output path relative to comp_dir (e.g.
+ * "../obj/a.dwo" for "-o ../obj/a.o"), so legitimate builds contain ".."
+ * segments; and comp_dir itself is an arbitrary absolute path, so the check
+ * would add no containment there.
+ */
+bool elfHasDotDotSegment(std::string_view path) noexcept;
+
+} // namespace detail
 
 /**
  * ELF file parser.
@@ -149,8 +169,20 @@ class ElfFile {
   ElfFile(ElfFile&& other) noexcept;
   ElfFile& operator=(ElfFile&& other) noexcept;
 
-  /** Retrieve the ELF header */
-  const ElfEhdr& elfHeader() const noexcept { return at<ElfEhdr>(0); }
+  /**
+   * Retrieve the ELF header.
+   *
+   * If the file is too short to contain a header (the object was never
+   * opened, or opening failed), returns an empty header so that queries
+   * degrade gracefully instead of aborting.
+   */
+  const ElfEhdr& elfHeader() const noexcept {
+    if (const auto* header = atIfValid<ElfEhdr>(0)) {
+      return *header;
+    }
+    static constexpr ElfEhdr kEmpty{};
+    return kEmpty;
+  }
 
   /**
    * Get the base address, the address where the file should be loaded if
@@ -281,13 +313,14 @@ class ElfFile {
    *
    * Returns a map containing a key for each unique symbol name in the provided
    * names container. The corresponding value is either Symbol or <nullptr,
-   * nullptr> if the symbol was not found.
+   * nullptr> if the symbol was not found. Allocation failures propagate to the
+   * caller.
    */
   template <typename C, typename T = typename C::value_type>
   std::unordered_map<std::string, Symbol> getSymbolsByName(
       const C& names,
       std::initializer_list<uint32_t> types = {
-          STT_OBJECT, STT_FUNC, STT_GNU_IFUNC}) const noexcept {
+          STT_OBJECT, STT_FUNC, STT_GNU_IFUNC}) const {
     std::unordered_map<std::string, Symbol> result(names.size());
     if (names.empty()) {
       return result;
@@ -335,6 +368,9 @@ class ElfFile {
    */
   template <class T>
   const T* getSymbolValue(const ElfSym* symbol) const noexcept {
+    if (symbol == nullptr) {
+      return nullptr;
+    }
     const ElfShdr* section = getSectionByIndex(symbol->st_shndx);
     if (section == nullptr) {
       return nullptr;
@@ -487,6 +523,10 @@ class ElfFile {
         return Unexpected(FindNoteError(FindNoteFailureCode::NoteUndersized));
       }
 
+      if (reinterpret_cast<uintptr_t>(noteBody.data()) % alignof(ElfNhdr) !=
+          0) {
+        return Unexpected(FindNoteError(FindNoteFailureCode::NoteUnaligned));
+      }
       const ElfNhdr* nhdr = reinterpret_cast<const ElfNhdr*>(noteBody.data());
       const size_t nameSize = nhdr->n_namesz;
       const size_t namePadding = (4 - nameSize % 4) % 4;
@@ -606,24 +646,35 @@ class ElfFile {
   // of section header 0.
   size_t getSectionHeaderStrIndex() const noexcept;
 
-  void validateStringTable(const ElfShdr& stringTable) const noexcept;
+  bool validateStringTable(const ElfShdr& stringTable) const noexcept;
 
+  /**
+   * Return a pointer if sizeof(T) bytes fit at offset in the mapped file.
+   * The returned pointer is not necessarily sufficiently aligned for T.
+   */
   template <class T>
-  const T& at(ElfOff offset) const noexcept {
+  const T* atIfInBounds(ElfOff offset) const noexcept {
     static_assert(
         std::is_standard_layout<T>::value && std::is_trivial<T>::value,
         "non-pod");
-    FOLLY_SAFE_CHECK(
-        offset + sizeof(T) <= length_,
-        "Offset (",
-        static_cast<size_t>(offset),
-        " + ",
-        sizeof(T),
-        ") is not contained within our mapped file (",
-        filepath_,
-        ") of length ",
-        length_);
-    return *reinterpret_cast<T*>(file_ + offset);
+    const auto start = static_cast<size_t>(offset);
+    if (static_cast<ElfOff>(start) != offset) {
+      return nullptr;
+    }
+    size_t end;
+    if (!folly::checked_add(&end, start, sizeof(T)) || end > length_) {
+      return nullptr;
+    }
+    return reinterpret_cast<const T*>(file_ + start);
+  }
+
+  template <class T>
+  const T* atIfValid(ElfOff offset) const noexcept {
+    const auto* value = atIfInBounds<T>(offset);
+    if (reinterpret_cast<uintptr_t>(value) % alignof(T) != 0) {
+      return nullptr;
+    }
+    return value;
   }
 
   template <class T>
@@ -641,8 +692,12 @@ class ElfFile {
           elfHeader().e_type == ET_CORE)) {
       return nullptr;
     }
-    if (!(addr >= section.sh_addr &&
-          (addr + sizeof(T)) <= (section.sh_addr + section.sh_size))) {
+    if (addr < section.sh_addr) {
+      return nullptr;
+    }
+    const auto relativeOffset = addr - section.sh_addr;
+    if (relativeOffset > section.sh_size ||
+        sizeof(T) > section.sh_size - relativeOffset) {
       return nullptr;
     }
 
@@ -655,9 +710,14 @@ class ElfFile {
       return &t;
     }
 
-    ElfOff offset = section.sh_offset + (addr - section.sh_addr);
-
-    return (offset + sizeof(T) <= length_) ? &at<T>(offset) : nullptr;
+    ElfOff offset;
+    if (!folly::checked_add(
+            &offset, section.sh_offset, static_cast<ElfOff>(relativeOffset))) {
+      return nullptr;
+    }
+    // Values at symbol addresses, such as instruction immediates, need not be
+    // aligned for T.
+    return atIfInBounds<T>(offset);
   }
 
   // Helper to iterate notes in a section or segment.

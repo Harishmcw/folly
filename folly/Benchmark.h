@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/BenchmarkUtil.h>
+#include <folly/CPortability.h>
 #include <folly/Portability.h>
 #include <folly/Preprocessor.h> // for FB_ANONYMOUS_VARIABLE
 #include <folly/Range.h>
@@ -26,6 +27,8 @@
 #include <folly/lang/Hint.h>
 #include <folly/portability/GFlags.h>
 
+#include <stddef.h>
+#include <stdint.h>
 #include <cassert>
 #include <chrono>
 #include <concepts>
@@ -35,9 +38,12 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include <glog/logging.h>
 
@@ -84,9 +90,7 @@ class UserMetric {
   explicit UserMetric(T precision_val, Type typ = Type::CUSTOM)
       : value(convert_helper(precision_val)), type(typ) {}
 
-  friend bool operator==(const UserMetric& x, const UserMetric& y) {
-    return x.value == y.value && x.type == y.type;
-  }
+  friend bool operator==(const UserMetric& x, const UserMetric& y) = default;
 
  private:
   double convert_helper(double val) { return val; }
@@ -248,8 +252,8 @@ template <typename Clock>
 class BenchmarkingState : public BenchmarkingStateBase {
  public:
   template <typename Lambda>
-  typename std::enable_if<std::is_invocable_v<Lambda, unsigned>>::type
-  addBenchmark(std::string file, std::string name, Lambda&& lambda) {
+    requires std::is_invocable_v<Lambda, unsigned>
+  void addBenchmark(std::string file, std::string name, Lambda&& lambda) {
     auto execute = [=](unsigned int times) {
       BenchmarkSuspender<Clock>::timeSpent = {};
       BenchmarkSuspender<Clock>::suspensionCount = 0;
@@ -272,8 +276,8 @@ class BenchmarkingState : public BenchmarkingStateBase {
   }
 
   template <typename Lambda>
-  typename std::enable_if<std::is_invocable_v<Lambda>>::type addBenchmark(
-      std::string file, std::string name, Lambda&& lambda) {
+    requires std::is_invocable_v<Lambda>
+  void addBenchmark(std::string file, std::string name, Lambda&& lambda) {
     addBenchmark(std::move(file), std::move(name), [=](unsigned int times) {
       unsigned int niter = 0;
       while (times-- > 0) {
@@ -284,9 +288,8 @@ class BenchmarkingState : public BenchmarkingStateBase {
   }
 
   template <typename Lambda>
-  typename std::enable_if<
-      std::is_invocable_v<Lambda, UserCounters&, unsigned>>::type
-  addBenchmark(std::string file, std::string name, Lambda&& lambda) {
+    requires std::is_invocable_v<Lambda, UserCounters&, unsigned>
+  void addBenchmark(std::string file, std::string name, Lambda&& lambda) {
     auto execute = [=](unsigned int times) {
       BenchmarkSuspender<Clock>::timeSpent = {};
       BenchmarkSuspender<Clock>::suspensionCount = 0;
@@ -313,8 +316,8 @@ class BenchmarkingState : public BenchmarkingStateBase {
   }
 
   template <typename Lambda>
-  typename std::enable_if<std::is_invocable_v<Lambda, UserCounters&>>::type
-  addBenchmark(std::string file, std::string name, Lambda&& lambda) {
+    requires std::is_invocable_v<Lambda, UserCounters&>
+  void addBenchmark(std::string file, std::string name, Lambda&& lambda) {
     addBenchmark(
         std::move(file),
         std::move(name),

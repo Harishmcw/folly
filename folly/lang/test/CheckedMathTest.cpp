@@ -20,6 +20,7 @@
 #include <limits>
 #include <random>
 
+#include <folly/Traits.h>
 #include <folly/lang/Keep.h>
 #include <folly/portability/GTest.h>
 
@@ -84,6 +85,72 @@ TEST(CheckedMath, checkedAddUint64TOverflow) {
   EXPECT_FALSE(
       folly::checked_add<uint64_t>(
           &a, std::numeric_limits<uint64_t>::max() - 7, 9));
+  EXPECT_EQ(a, {});
+}
+
+TEST(CheckedMath, checkedSubNoOverflow) {
+  unsigned int a;
+
+  EXPECT_TRUE(folly::checked_sub(&a, 9u, 4u));
+  EXPECT_EQ(a, 5);
+}
+
+TEST(CheckedMath, checkedSubUnderflow) {
+  unsigned int a;
+
+  EXPECT_FALSE(folly::checked_sub(&a, 4u, 9u));
+  EXPECT_EQ(a, {});
+}
+
+TEST(CheckedMath, checkedSubUint64TUnderflow) {
+  uint64_t a;
+
+  EXPECT_FALSE(folly::checked_sub<uint64_t>(&a, 7, 9));
+  EXPECT_EQ(a, {});
+}
+
+TEST(CheckedMath, checkedSubSignedNoOverflow) {
+  int a = 1;
+
+  EXPECT_TRUE(folly::checked_sub(&a, 9, 4));
+  EXPECT_EQ(a, 5);
+}
+
+TEST(CheckedMath, checkedSubSignedOverflow) {
+  int64_t a = 1;
+
+  EXPECT_FALSE(
+      folly::checked_sub(&a, std::numeric_limits<int64_t>::max(), int64_t{-1}));
+  EXPECT_EQ(a, {});
+}
+
+TEST(CheckedMath, checkedSubSignedUnderflow) {
+  int64_t a = 1;
+
+  EXPECT_FALSE(
+      folly::checked_sub(&a, std::numeric_limits<int64_t>::min(), int64_t{1}));
+  EXPECT_EQ(a, {});
+}
+
+TEST(CheckedMath, checkedSubSignedMinBoundaries) {
+  int64_t a = 1;
+
+  // min - min is exact.
+  EXPECT_TRUE(
+      folly::checked_sub(
+          &a,
+          std::numeric_limits<int64_t>::min(),
+          std::numeric_limits<int64_t>::min()));
+  EXPECT_EQ(a, 0);
+
+  // -1 - min == max is exact.
+  EXPECT_TRUE(
+      folly::checked_sub(&a, int64_t{-1}, std::numeric_limits<int64_t>::min()));
+  EXPECT_EQ(a, std::numeric_limits<int64_t>::max());
+
+  // 0 - min overflows.
+  EXPECT_FALSE(
+      folly::checked_sub(&a, int64_t{0}, std::numeric_limits<int64_t>::min()));
   EXPECT_EQ(a, {});
 }
 
@@ -205,6 +272,73 @@ TEST(CheckedMath, genericCheckedAddUint64TOverflow) {
   EXPECT_EQ(a, {});
 }
 
+TEST(CheckedMath, genericCheckedSubSignedNoOverflow) {
+  int a;
+
+  EXPECT_TRUE(folly::detail::generic_checked_sub(&a, 9, 4));
+  EXPECT_EQ(a, 5);
+}
+
+TEST(CheckedMath, genericCheckedSubSignedOverflow) {
+  int a;
+
+  EXPECT_FALSE(
+      folly::detail::generic_checked_sub(
+          &a, std::numeric_limits<int>::max(), -4));
+  EXPECT_EQ(a, {});
+}
+
+TEST(CheckedMath, genericCheckedSubSignedUnderflow) {
+  int a;
+
+  EXPECT_FALSE(
+      folly::detail::generic_checked_sub(
+          &a, std::numeric_limits<int>::min(), 3));
+  EXPECT_EQ(a, {});
+}
+
+TEST(CheckedMath, genericCheckedSubSignedMinBoundaries) {
+  int64_t a;
+
+  EXPECT_TRUE(
+      folly::detail::generic_checked_sub(
+          &a, int64_t{-1}, std::numeric_limits<int64_t>::min()));
+  EXPECT_EQ(a, std::numeric_limits<int64_t>::max());
+
+  EXPECT_FALSE(
+      folly::detail::generic_checked_sub(
+          &a, int64_t{0}, std::numeric_limits<int64_t>::min()));
+  EXPECT_EQ(a, {});
+}
+
+TEST(CheckedMath, genericCheckedSubNoOverflow) {
+  unsigned int a;
+
+  EXPECT_TRUE(folly::detail::generic_checked_sub(&a, 9u, 4u));
+  EXPECT_EQ(a, 5);
+}
+
+TEST(CheckedMath, genericCheckedSubUnderflow) {
+  unsigned int a;
+
+  EXPECT_FALSE(folly::detail::generic_checked_sub(&a, 4u, 9u));
+  EXPECT_EQ(a, {});
+}
+
+TEST(CheckedMath, genericCheckedSubLimit) {
+  unsigned int a;
+
+  EXPECT_TRUE(folly::detail::generic_checked_sub(&a, 7u, 7u));
+  EXPECT_EQ(a, 0);
+}
+
+TEST(CheckedMath, genericCheckedSubUint64TUnderflow) {
+  uint64_t a;
+
+  EXPECT_FALSE(folly::detail::generic_checked_sub<uint64_t>(&a, 7, 9));
+  EXPECT_EQ(a, {});
+}
+
 TEST(CheckedMath, checkedDivSafeDivisor) {
   unsigned int a;
 
@@ -229,8 +363,103 @@ TEST(CheckedMath, checkedModSafeDivisor) {
 TEST(CheckedMath, checkedModZeroDivisor) {
   unsigned int a;
 
-  EXPECT_FALSE(folly::checked_div(&a, 5u, 0u));
+  EXPECT_FALSE(folly::checked_mod(&a, 5u, 0u));
   EXPECT_EQ(a, {});
+}
+
+TEST(CheckedMath, checkedDivSignedOverflow) {
+  int64_t result64 = 1;
+  EXPECT_FALSE(
+      folly::checked_div(
+          &result64, std::numeric_limits<int64_t>::min(), int64_t{-1}));
+  EXPECT_EQ(result64, 0);
+
+  int32_t result32 = 1;
+  EXPECT_FALSE(
+      folly::checked_div(
+          &result32, std::numeric_limits<int32_t>::min(), int32_t{-1}));
+  EXPECT_EQ(result32, 0);
+}
+
+TEST(CheckedMath, checkedModSignedOverflow) {
+  int64_t result64 = 1;
+  EXPECT_FALSE(
+      folly::checked_mod(
+          &result64, std::numeric_limits<int64_t>::min(), int64_t{-1}));
+  EXPECT_EQ(result64, 0);
+
+  int32_t result32 = 1;
+  EXPECT_FALSE(
+      folly::checked_mod(
+          &result32, std::numeric_limits<int32_t>::min(), int32_t{-1}));
+  EXPECT_EQ(result32, 0);
+}
+
+TEST(CheckedMath, checkedDivNarrowSignedOverflow) {
+  int8_t result8 = 1;
+  EXPECT_FALSE(
+      folly::checked_div(
+          &result8, std::numeric_limits<int8_t>::min(), int8_t{-1}));
+  EXPECT_EQ(result8, 0);
+
+  int16_t result16 = 1;
+  EXPECT_FALSE(
+      folly::checked_div(
+          &result16, std::numeric_limits<int16_t>::min(), int16_t{-1}));
+  EXPECT_EQ(result16, 0);
+}
+
+#if FOLLY_HAVE_INT128_T
+TEST(CheckedMath, checkedDivModInt128SignedOverflow) {
+  constexpr auto min = folly::int128_t(folly::uint128_t{1} << 127);
+  folly::int128_t result = 1;
+  EXPECT_FALSE(folly::checked_div(&result, min, folly::int128_t{-1}));
+  EXPECT_EQ(result, 0);
+
+  result = 1;
+  EXPECT_FALSE(folly::checked_mod(&result, min, folly::int128_t{-1}));
+  EXPECT_EQ(result, 0);
+}
+
+TEST(CheckedMath, checkedDivModInt128ZeroDividend) {
+  folly::int128_t result = 1;
+  EXPECT_TRUE(
+      folly::checked_div(&result, folly::int128_t{0}, folly::int128_t{-1}));
+  EXPECT_EQ(result, 0);
+
+  result = 1;
+  EXPECT_TRUE(
+      folly::checked_mod(&result, folly::int128_t{0}, folly::int128_t{-1}));
+  EXPECT_EQ(result, 0);
+}
+#endif
+
+TEST(CheckedMath, checkedDivSignedSafeDivisors) {
+  int64_t result = 1;
+  auto min = std::numeric_limits<int64_t>::min();
+  EXPECT_TRUE(folly::checked_div(&result, min, int64_t{1}));
+  EXPECT_EQ(result, min);
+  EXPECT_TRUE(folly::checked_div(&result, min, int64_t{-2}));
+  EXPECT_EQ(result, -(min / 2));
+  EXPECT_TRUE(folly::checked_div(&result, int64_t{8}, int64_t{-1}));
+  EXPECT_EQ(result, -8);
+}
+
+TEST(CheckedMath, checkedModSignedSafeDivisors) {
+  int8_t smallResult = 1;
+  EXPECT_TRUE(
+      folly::checked_mod(
+          &smallResult, std::numeric_limits<int8_t>::min(), int8_t{-1}));
+  EXPECT_EQ(smallResult, 0);
+
+  int64_t result = 1;
+  auto min = std::numeric_limits<int64_t>::min();
+  EXPECT_TRUE(folly::checked_mod(&result, min, int64_t{1}));
+  EXPECT_EQ(result, 0);
+  EXPECT_TRUE(folly::checked_mod(&result, min, int64_t{-2}));
+  EXPECT_EQ(result, 0);
+  EXPECT_TRUE(folly::checked_mod(&result, int64_t{8}, int64_t{-1}));
+  EXPECT_EQ(result, 0);
 }
 
 TEST(CheckedMath, checkedMulNoOverflow) {
@@ -372,6 +601,43 @@ TEST(CheckedMath, genericCheckedMulVsBuiltin) {
 }
 #endif
 
+// __builtin_sub_overflow has the most straight-forward interface for doing
+// this check, and the generic code will be the same regardless of the compiler.
+#if FOLLY_HAS_BUILTIN(__builtin_sub_overflow)
+TEST(CheckedMath, genericCheckedSubVsBuiltin) {
+  std::mt19937_64 mt{std::random_device()()};
+
+  constexpr size_t IterationCount = 1'000'000;
+  size_t verifiedOverflow = 0;
+  size_t verifiedOk = 0;
+  auto check = [&](auto a, auto b) {
+    using T = decltype(a);
+    T genRes = 0;
+    T builtinRes = 0;
+    bool genOk = folly::detail::generic_checked_sub<T>(&genRes, a, b);
+    bool builtinOk = !__builtin_sub_overflow(a, b, &builtinRes);
+    EXPECT_EQ(genOk, builtinOk);
+    if (genOk && builtinOk) {
+      EXPECT_EQ(genRes, builtinRes);
+      verifiedOk++;
+    } else {
+      // __builtin doesn't guarantee the value of builtinRes when an overflow
+      // happens, but generic_checked_* guarantees it's zero.
+      verifiedOverflow++;
+    }
+  };
+  for (size_t i = 0; i < IterationCount; i++) {
+    uint64_t r1 = mt();
+    uint64_t r2 = mt();
+    check(static_cast<int64_t>(r1), static_cast<int64_t>(r2));
+    check(r1, r2);
+  }
+
+  EXPECT_NE(verifiedOverflow, 0);
+  EXPECT_NE(verifiedOk, 0);
+}
+#endif
+
 TEST(CheckedMath, checkedMuladdNoOverflow) {
   unsigned int a;
 
@@ -413,4 +679,27 @@ TEST(CheckedMath, checkedPtrAddOverflow) {
       folly::checked_add(
           &a, &buf[0], std::numeric_limits<uint64_t>::max() - 7));
   EXPECT_EQ(a, nullptr);
+}
+
+TEST(CheckedMath, constexpr) {
+  constexpr auto add = [](auto a, auto b) {
+    decltype(a) r{};
+    return folly::checked_add(&r, a, b) ? r : decltype(a){0};
+  };
+  constexpr auto mul = [](auto a, auto b) {
+    decltype(a) r{};
+    return folly::checked_mul(&r, a, b) ? r : decltype(a){0};
+  };
+  constexpr auto sub = [](auto a, auto b) {
+    decltype(a) r{};
+    return folly::checked_sub(&r, a, b) ? r : decltype(a){0};
+  };
+  static_assert(add(uint32_t{2}, uint32_t{3}) == 5);
+  static_assert(add(std::numeric_limits<uint64_t>::max(), uint64_t{1}) == 0);
+  static_assert(mul(uint64_t{1} << 32, uint64_t{4}) == uint64_t{1} << 34);
+  static_assert(mul(uint64_t{1} << 32, uint64_t{1} << 32) == 0);
+  static_assert(sub(9u, 4u) == 5);
+  static_assert(sub(4u, 9u) == 0);
+  static_assert(sub(int64_t{9}, int64_t{4}) == 5);
+  static_assert(sub(std::numeric_limits<int64_t>::min(), int64_t{1}) == 0);
 }

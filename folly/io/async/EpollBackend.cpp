@@ -22,10 +22,18 @@
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
 
+#include <array>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+#include <folly/Conv.h>
 #include <folly/IntrusiveList.h>
 #include <folly/MapUtil.h>
 #include <folly/String.h>
 #include <folly/io/async/EpollBackend.h>
+#include <folly/lang/Exception.h>
+#include <folly/system/Pid.h>
 
 #include <folly/FileUtil.h>
 
@@ -36,20 +44,26 @@ extern "C" FOLLY_ATTR_WEAK void eb_poll_loop_post_hook(
 namespace folly {
 namespace {
 
-struct EventInfo {
-  static void freeFunction(void* v) { delete static_cast<EventInfo*>(v); }
+// `epoll_event.data` of the entries that are not an Event's fd. As fds they
+// would be -1 and -2.
+constexpr uint64_t kTimerData = ~uint64_t{0};
+constexpr uint64_t kSignalData = ~uint64_t{0} - 1;
 
-  void resetEvent() {
-    listHook.unlink(); // Remove from the info list.
-    ev = nullptr;
-  }
+// `epoll_event.data` of an Event's fd: a stale entry, one that outlived the
+// fd's close through a dup of it, carries a generation the fd no longer has.
+uint64_t entryData(int fd, uint32_t generation) {
+  return (uint64_t{generation} << 32) | static_cast<uint32_t>(fd);
+}
 
-  folly::IntrusiveListHook listHook;
-  EventBaseBackendBase::Event* ev{nullptr};
-  int what_{0};
-};
+// The directions an fd entry holds an Event for, in FdEntry::owners order.
+constexpr std::array<short, 2> kDirections{{EV_READ, EV_WRITE}};
+constexpr std::array<uint32_t, 2> kDirectionFlags{{EPOLLIN, EPOLLOUT}};
 
-using EventInfoList = folly::IntrusiveList<EventInfo, &EventInfo::listHook>;
+// The fd was closed. Its entry went with it, unless a dup keeps the file open,
+// and then no fd can reach the entry.
+bool isGone(int err) {
+  return err == ENOENT || err == EBADF;
+}
 
 struct SignalRegistry {
   struct SigInfo {
@@ -124,20 +138,22 @@ void SignalRegistry::setNotifyFd(int sig, int fd) {
   }
 }
 
-uint32_t getPollFlags(short events) {
-  uint32_t ret = 0;
-  if (events & EV_READ) {
-    ret |= EPOLLIN;
-  }
-
-  if (events & EV_WRITE) {
-    ret |= EPOLLOUT;
-  }
-
-  return ret;
-}
-
 } // namespace
+
+struct EpollBackend::EventInfo {
+  static void freeFunction(void* v) { delete static_cast<EventInfo*>(v); }
+
+  void resetEvent() {
+    listHook.unlink(); // Remove from the info list.
+    ev = nullptr;
+    res = 0;
+  }
+
+  folly::IntrusiveListHook listHook;
+  EventBaseBackendBase::Event* ev{nullptr};
+  // The directions that fired in the batch being collected.
+  short res{0};
+};
 
 struct EpollBackend::TimerInfo : public IntrusiveHeapNode<> {
   bool operator<(const TimerInfo& other) const {
@@ -173,7 +189,8 @@ EpollBackend::SocketPair::~SocketPair() {
   }
 }
 
-EpollBackend::EpollBackend(Options options) : options_(options) {
+EpollBackend::EpollBackend(Options options)
+    : options_(options), pid_(get_cached_pid()) {
   epollFd_ = ::epoll_create1(EPOLL_CLOEXEC);
 
   if (epollFd_ == -1) {
@@ -189,17 +206,14 @@ EpollBackend::EpollBackend(Options options) : options_(options) {
     }
     struct epoll_event epev = {};
     epev.events = EPOLLIN;
-    // epoll_data is a union, so we need to use pointers for all events. We can
-    // use any unique pointer to distinguish the timerfd event, use the address
-    // of the fd variable.
-    epev.data.ptr = &timerFd_;
+    epev.data.u64 = kTimerData;
     PCHECK(::epoll_ctl(epollFd_, EPOLL_CTL_ADD, timerFd_, &epev) == 0);
   }
 
   {
     struct epoll_event epev = {};
     epev.events = EPOLLIN;
-    epev.data.ptr = &signalFds_;
+    epev.data.u64 = kSignalData;
     PCHECK(
         ::epoll_ctl(epollFd_, EPOLL_CTL_ADD, signalFds_.readFd(), &epev) == 0);
   }
@@ -212,7 +226,24 @@ EpollBackend::~EpollBackend() {
   fileops::close(timerFd_);
 }
 
+bool EpollBackend::inOtherProcess() const {
+  return FOLLY_UNLIKELY(pid_ != get_cached_pid());
+}
+
+void EpollBackend::checkPid() const {
+  if (inOtherProcess()) {
+    checkPidFail();
+  }
+}
+
+[[noreturn]] FOLLY_NOINLINE void EpollBackend::checkPidFail() const {
+  terminate_with<std::runtime_error>(
+      "pid mismatch: EpollBackend of pid " + to<std::string>(pid_) +
+      " used in pid " + to<std::string>(get_cached_pid()));
+}
+
 int EpollBackend::eb_event_base_loop(int flags) {
+  checkPid();
   const bool waitForEvents = (flags & EVLOOP_NONBLOCK) == 0;
   while (true) {
     if (loopBreak_) {
@@ -257,40 +288,64 @@ int EpollBackend::eb_event_base_loop(int flags) {
     bool shouldProcessSignals = false;
     // Callbacks may delete other active events, so we accumulate active events
     // first into an intrusive list that is updated if events in it are deleted.
-    EventInfoList infoList;
+    IntrusiveList<EventInfo, &EventInfo::listHook> infoList;
     for (int i = 0; i < numEvents; ++i) {
-      if (events_[i].data.ptr == &timerFd_) {
+      uint64_t data = events_[i].data.u64;
+      if (data == kTimerData) {
         shouldProcessTimers = true;
         continue;
-      } else if (events_[i].data.ptr == &signalFds_) {
+      } else if (data == kSignalData) {
         shouldProcessSignals = true;
         continue;
       }
 
-      auto* info = static_cast<EventInfo*>(events_[i].data.ptr);
-      auto* event = info->ev;
-      info->what_ = events_[i].events;
-      // if not persistent we need to remove it
-      if (~event->eb_ev_events() & EV_PERSIST) {
-        if (event->eb_registration() == Event::Registration::kInserted) {
-          event->eb_set_registration(Event::Registration::kNone);
-
-          DCHECK_GT(numInsertedEvents_, 0);
-          numInsertedEvents_--;
-
-          if (event->eb_internal()) {
-            DCHECK_GT(numInternalEvents_, 0);
-            numInternalEvents_--;
-          }
-
-          PCHECK(
-              ::epoll_ctl(
-                  epollFd_, EPOLL_CTL_DEL, event->eb_ev_fd(), nullptr) == 0);
-        }
+      int fd = static_cast<int>(static_cast<uint32_t>(data));
+      auto it = fds_.find(fd);
+      // The kernel cannot be told to drop a stale entry, so it is skipped for
+      // as long as the dup keeps it alive.
+      if (it == fds_.end() ||
+          it->second.generation != static_cast<uint32_t>(data >> 32)) {
+        continue;
       }
+      uint32_t what = events_[i].events;
+      // A hang-up or an error belongs to the fd, so it wakes every direction
+      // its Events asked for.
+      bool hangUp = (what & (EPOLLHUP | EPOLLERR)) != 0;
+      // Copied: releasing a one-shot Event below changes the entry.
+      auto owners = it->second.owners;
+      for (size_t d = 0; d < kDirections.size(); ++d) {
+        auto* info = owners[d];
+        if (info == nullptr || (!hangUp && (what & kDirectionFlags[d]) == 0)) {
+          continue;
+        }
+        auto* event = info->ev;
+        info->res |= hangUp
+            ? (event->eb_ev_events() & (EV_READ | EV_WRITE))
+            : kDirections[d];
+        // A READ|WRITE Event already collected through its other direction.
+        if (info->listHook.is_linked()) {
+          continue;
+        }
+        // if not persistent we need to remove it
+        if (~event->eb_ev_events() & EV_PERSIST) {
+          if (event->eb_registration() == Event::Registration::kInserted) {
+            event->eb_set_registration(Event::Registration::kNone);
 
-      event->eb_set_active(true);
-      infoList.push_back(*info);
+            DCHECK_GT(numInsertedEvents_, 0);
+            numInsertedEvents_--;
+
+            if (event->eb_internal()) {
+              DCHECK_GT(numInternalEvents_, 0);
+              numInternalEvents_--;
+            }
+
+            PCHECK(releaseFd(fd, info) == 0);
+          }
+        }
+
+        event->eb_set_active(true);
+        infoList.push_back(*info);
+      }
     }
 
     // Process timers and signals first.
@@ -306,39 +361,11 @@ int EpollBackend::eb_event_base_loop(int flags) {
       infoList.pop_front();
 
       Event* event = info->ev;
-
-      int what = info->what_;
-      short ev = 0;
-
-      bool evRead = (event->eb_ev_events() & EV_READ) != 0;
-      bool evWrite = (event->eb_ev_events() & EV_WRITE) != 0;
-
-      if (what & EPOLLERR) {
-        if (evRead) {
-          ev |= EV_READ;
-        }
-        if (evWrite) {
-          ev |= EV_WRITE;
-        }
-      } else if ((what & EPOLLHUP) && !(what & EPOLLRDHUP)) {
-        if (evRead) {
-          ev |= EV_READ;
-        }
-        if (evWrite) {
-          ev |= EV_WRITE;
-        }
-      } else {
-        if (evRead && (what & EPOLLIN)) {
-          ev |= EV_READ;
-        }
-        if (evWrite && (what & EPOLLOUT)) {
-          ev |= EV_WRITE;
-        }
-      }
+      short res = std::exchange(info->res, 0);
 
       event->eb_set_active(false);
-      event->eb_set_ev_res(ev);
-      if (event->eb_ev_res()) {
+      event->eb_set_ev_res(res);
+      if (res != 0) {
         event->eb_ev_invoke_callback();
       }
     }
@@ -355,6 +382,7 @@ int EpollBackend::eb_event_base_loopbreak() {
 }
 
 int EpollBackend::eb_event_add(Event& event, const struct timeval* timeout) {
+  checkPid();
   // we do not support read/write timeouts
   if (timeout) {
     event.eb_set_registration(Event::Registration::kTimeout);
@@ -368,25 +396,55 @@ int EpollBackend::eb_event_add(Event& event, const struct timeval* timeout) {
     return 0;
   }
 
-  if (event.eb_internal()) {
-    numInternalEvents_++;
+  // Adding an Event that is already registered changes nothing.
+  if (event.eb_registration() == Event::Registration::kInserted) {
+    return 0;
   }
 
-  event.eb_set_registration(Event::Registration::kInserted);
-  numInsertedEvents_++;
+  short dirs = event.eb_ev_events() & (EV_READ | EV_WRITE);
+  // An Event with neither READ nor WRITE takes no entry.
+  if (dirs == 0) {
+    return 0;
+  }
 
   EventInfo* info = static_cast<EventInfo*>(event.getUserData());
   if (!info) {
     info = new EventInfo();
     event.setUserData(info, EventInfo::freeFunction);
   }
+
+  int fd = event.eb_ev_fd();
+  bool shared = false;
+  bool conflict = false;
+  bool edge = false;
+  if (auto it = fds_.find(fd); it != fds_.end()) {
+    for (size_t d = 0; d < kDirections.size(); ++d) {
+      auto* owner = it->second.owners[d];
+      if (owner != nullptr && owner != info) {
+        shared = true;
+        conflict = conflict || (dirs & kDirections[d]) != 0;
+      }
+    }
+    edge = it->second.edge;
+  }
+
+  // A refused Event stays unregistered, so that the eb_event_del a caller
+  // cleans up with does not take down the registration it collided with.
+  bool join = shared && !conflict && !edge;
+  if ((join ? joinFd(fd, info, dirs) : holdFdAlone(fd, info, dirs)) != 0) {
+    // EPOLLET would apply to the other Event too.
+    if (errno == EEXIST && shared && !conflict) {
+      errno = EBUSY;
+    }
+    return -1;
+  }
   info->ev = &event;
-
-  struct epoll_event epev = {};
-  epev.events = getPollFlags(event.eb_ev_events() & (EV_READ | EV_WRITE));
-  epev.data.ptr = info;
-
-  return ::epoll_ctl(epollFd_, EPOLL_CTL_ADD, event.eb_ev_fd(), &epev);
+  event.eb_set_registration(Event::Registration::kInserted);
+  numInsertedEvents_++;
+  if (event.eb_internal()) {
+    numInternalEvents_++;
+  }
+  return 0;
 }
 
 int EpollBackend::eb_event_del(Event& event) {
@@ -429,26 +487,141 @@ int EpollBackend::eb_event_del(Event& event) {
       numInternalEvents_--;
     }
 
-    return ::epoll_ctl(epollFd_, EPOLL_CTL_DEL, event.eb_ev_fd(), nullptr);
+    return releaseFd(event.eb_ev_fd(), info);
   }
 
   errno = EINVAL;
   return -1;
 }
 
+uint32_t EpollBackend::interest(const FdEntry& entry) {
+  uint32_t events = 0;
+  for (size_t d = 0; d < kDirections.size(); ++d) {
+    if (entry.owners[d] != nullptr) {
+      events |= kDirectionFlags[d];
+    }
+  }
+  if (events != 0 && entry.edge) {
+    events |= EPOLLET;
+  }
+  return events;
+}
+
+int EpollBackend::holdFdAlone(int fd, EventInfo* info, short dirs) {
+  FdEntry entry;
+  entry.generation = ++nextGeneration_;
+  for (size_t d = 0; d < kDirections.size(); ++d) {
+    if (dirs & kDirections[d]) {
+      entry.owners[d] = info;
+    }
+  }
+  struct epoll_event epev = {};
+  epev.events = interest(entry);
+  epev.data.u64 = entryData(fd, entry.generation);
+  if (::epoll_ctl(epollFd_, EPOLL_CTL_ADD, fd, &epev) != 0) {
+    return -1;
+  }
+  // The kernel had no entry for this fd's file, so any Event that held the
+  // number before had its fd closed under it; it gives way.
+  fds_[fd] = entry;
+  return 0;
+}
+
+int EpollBackend::joinFd(int fd, EventInfo* info, short dirs) {
+  FdEntry& entry = fds_.at(fd);
+  FdEntry joined = entry;
+  for (size_t d = 0; d < kDirections.size(); ++d) {
+    if (dirs & kDirections[d]) {
+      joined.owners[d] = info;
+    }
+  }
+  struct epoll_event epev = {};
+  epev.events = interest(joined);
+  epev.data.u64 = entryData(fd, entry.generation);
+  if (::epoll_ctl(epollFd_, EPOLL_CTL_MOD, fd, &epev) == 0) {
+    entry = joined;
+    return 0;
+  }
+  if (!isGone(errno)) {
+    return -1;
+  }
+  // The other Event's fd was closed under it.
+  return holdFdAlone(fd, info, dirs);
+}
+
+int EpollBackend::releaseFd(int fd, EventInfo* info) {
+  auto it = fds_.find(fd);
+  if (it == fds_.end()) {
+    return 0;
+  }
+  FdEntry& entry = it->second;
+  bool held = false;
+  for (auto& owner : entry.owners) {
+    if (owner == info) {
+      owner = nullptr;
+      held = true;
+    }
+  }
+  // Another Event took the number over after this one's fd was closed.
+  if (!held) {
+    return 0;
+  }
+  if (inOtherProcess()) {
+    if (interest(entry) == 0) {
+      fds_.erase(it);
+    }
+    return 0;
+  }
+  int rc = 0;
+  if (uint32_t events = interest(entry); events == 0) {
+    fds_.erase(it);
+    rc = ::epoll_ctl(epollFd_, EPOLL_CTL_DEL, fd, nullptr);
+  } else {
+    struct epoll_event epev = {};
+    epev.events = events;
+    epev.data.u64 = entryData(fd, entry.generation);
+    rc = ::epoll_ctl(epollFd_, EPOLL_CTL_MOD, fd, &epev);
+  }
+  if (rc != 0 && !isGone(errno)) {
+    return -1;
+  }
+  return 0;
+}
+
 bool EpollBackend::setEdgeTriggered(Event& event) {
   EventInfo* info = static_cast<EventInfo*>(event.getUserData());
-  if (info == nullptr) {
+  if (info == nullptr || inOtherProcess()) {
     return false;
   }
+  auto it = fds_.find(event.eb_ev_fd());
+  if (it == fds_.end()) {
+    return false;
+  }
+  FdEntry& entry = it->second;
+  bool held = false;
+  for (auto* owner : entry.owners) {
+    // EPOLLET would apply to the other Event too.
+    if (owner != nullptr && owner != info) {
+      return false;
+    }
+    held = held || owner == info;
+  }
+  if (!held) {
+    return false;
+  }
+  if (entry.edge) {
+    return true;
+  }
 
+  entry.edge = true;
   struct epoll_event epev = {};
-  epev.events =
-      getPollFlags(event.eb_ev_events() & (EV_READ | EV_WRITE)) | EPOLLET;
-  epev.data.ptr = info;
-
-  int ret = ::epoll_ctl(epollFd_, EPOLL_CTL_MOD, event.eb_ev_fd(), &epev);
-  return ret == 0;
+  epev.events = interest(entry);
+  epev.data.u64 = entryData(event.eb_ev_fd(), entry.generation);
+  if (::epoll_ctl(epollFd_, EPOLL_CTL_MOD, event.eb_ev_fd(), &epev) != 0) {
+    entry.edge = false;
+    return false;
+  }
+  return true;
 }
 
 void EpollBackend::addTimerEvent(Event& event, const struct timeval* timeout) {
@@ -468,7 +641,7 @@ void EpollBackend::addTimerEvent(Event& event, const struct timeval* timeout) {
     timers_.push(info);
   }
 
-  updateTimerFd();
+  armTimerFd();
 }
 
 int EpollBackend::removeTimerEvent(Event& event) {
@@ -480,47 +653,39 @@ int EpollBackend::removeTimerEvent(Event& event) {
 
   DCHECK_EQ(event.getFreeFunction(), TimerInfo::freeFunction);
   timers_.erase(info);
-  updateTimerFd();
   return 0;
 }
 
-void EpollBackend::updateTimerFd() {
-  std::optional<std::chrono::steady_clock::time_point> expiration;
-  if (auto* earliest = timers_.top()) {
-    expiration = earliest->expiration;
-  }
-  if (expiration == timerFdExpiration_) {
-    return; // Nothing to do.
+void EpollBackend::armTimerFd() {
+  auto* earliest = timers_.top();
+  if (earliest == nullptr ||
+      (timerFdExpiration_ && *timerFdExpiration_ <= earliest->expiration)) {
+    return;
   }
 
-  if (!expiration) {
-    struct itimerspec val = {}; // Disable.
-    PCHECK(::timerfd_settime(timerFd_, 0, &val, nullptr) == 0);
-  } else {
-    auto delta = std::chrono::duration_cast<std::chrono::microseconds>(
-        *expiration - std::chrono::steady_clock::now());
-    if (delta < std::chrono::microseconds(1000)) {
-      delta = std::chrono::microseconds(1000);
-    }
-
-    struct itimerspec val;
-    val.it_interval = {0, 0};
-    val.it_value.tv_sec =
-        std::chrono::duration_cast<std::chrono::seconds>(delta).count();
-    val.it_value.tv_nsec =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(delta).count() %
-        1'000'000'000LL;
-
-    PCHECK(::timerfd_settime(timerFd_, 0, &val, nullptr) == 0);
+  auto delta = std::chrono::duration_cast<std::chrono::microseconds>(
+      earliest->expiration - std::chrono::steady_clock::now());
+  if (delta < std::chrono::microseconds(1000)) {
+    delta = std::chrono::microseconds(1000);
   }
 
-  timerFdExpiration_ = expiration;
+  struct itimerspec val = {};
+  val.it_interval = {0, 0};
+  val.it_value.tv_sec =
+      std::chrono::duration_cast<std::chrono::seconds>(delta).count();
+  val.it_value.tv_nsec =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(delta).count() %
+      1'000'000'000LL;
+
+  PCHECK(::timerfd_settime(timerFd_, 0, &val, nullptr) == 0);
+  timerFdExpiration_ = earliest->expiration;
 }
 
 void EpollBackend::processTimers() {
   // Consume the event.
   uint64_t data = 0;
   PCHECK(folly::readNoInt(timerFd_, &data, sizeof(data)) == sizeof(data));
+  timerFdExpiration_.reset();
 
   while (!timers_.empty() &&
          timers_.top()->expiration <= std::chrono::steady_clock::now()) {
@@ -532,7 +697,7 @@ void EpollBackend::processTimers() {
     ev->eb_ev_invoke_callback();
   }
 
-  updateTimerFd();
+  armTimerFd();
 }
 
 void EpollBackend::addSignalEvent(Event& event) {

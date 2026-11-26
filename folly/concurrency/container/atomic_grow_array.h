@@ -154,11 +154,8 @@ class atomic_grow_array : private Policy {
     basic_iterator(array const* const a, end_tag) noexcept
         : array_{a}, index_{a ? a->size : 0} {}
 
-    template <
-        bool ThatC,
-        typename ThatDown,
-        bool ThisC = Const,
-        typename = std::enable_if_t<!ThatC && ThisC>>
+    template <bool ThatC, typename ThatDown>
+      requires(!ThatC && Const)
     explicit basic_iterator(basic_iterator<ThatC, ThatDown> that) noexcept
         : array_{that.array_}, index_{that.index_} {}
 
@@ -234,10 +231,8 @@ class atomic_grow_array : private Policy {
 
     explicit basic_view(array const* arr) noexcept : array_{arr} {}
 
-    template <
-        bool ThatC,
-        bool ThisC = Const,
-        typename = std::enable_if_t<!ThatC && ThisC>>
+    template <bool ThatC>
+      requires(!ThatC && Const)
     explicit basic_view(basic_view<ThatC> that) noexcept
         : array_{that.array_} {}
 
@@ -580,8 +575,7 @@ class atomic_grow_array : private Policy {
     assert(size > base);
     array* curr = static_cast<array*>(
         operator_new(array_size(size, base), std::align_val_t{array_align()}));
-    auto rollback =
-        folly::makeGuard(std::bind(&atomic_grow_array::del_array, this, curr));
+    auto rollback = folly::makeGuard([this, curr] { del_array(curr); });
     curr->size = size;
     curr->next = next;
     auto const slab = array_slab(curr);

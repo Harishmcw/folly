@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <algorithm>
 #include <cstring>
+#include <string_view>
 
 #include <glog/logging.h>
 
@@ -53,6 +54,24 @@
 namespace folly {
 namespace symbolizer {
 
+namespace detail {
+
+bool elfHasDotDotSegment(std::string_view path) noexcept {
+  for (size_t i = 0; i < path.size();) {
+    size_t end = i;
+    while (end < path.size() && path[end] != '/') {
+      ++end;
+    }
+    if (end - i == 2 && path[i] == '.' && path[i + 1] == '.') {
+      return true;
+    }
+    i = end + 1;
+  }
+  return false;
+}
+
+} // namespace detail
+
 void ElfFile::warmUp() noexcept {
   detail::signal_safe_libc::warmUp();
 }
@@ -77,8 +96,8 @@ void ElfFile::open(const char* name, Options const& options) {
   auto r = openNoThrow(name, options);
   if (r == kSystemError) {
     throwSystemError(r.msg);
-  } else {
-    CHECK_EQ(r, kSuccess) << r.msg;
+  } else if (r != kSuccess) {
+    throw std::runtime_error(r.msg);
   }
 }
 
@@ -89,8 +108,10 @@ ElfFile::OpenResult ElfFile::openNoThrow(
   // check failure above if we leave fd != -1 and the object is recycled
   auto guard = makeGuard([&] { reset(); });
   detail::signal_safe_libc::strlcpy(filepath_, name, kFilepathMaxLen - 1);
+  // O_NONBLOCK is ignored for regular files but keeps opening a fifo from
+  // blocking; non-regular files are rejected below via fstat.
   fd_ = detail::signal_safe_libc::open(
-      name, (options.writable() ? O_RDWR : O_RDONLY) | O_CLOEXEC);
+      name, (options.writable() ? O_RDWR : O_RDONLY) | O_CLOEXEC | O_NONBLOCK);
   if (fd_ == -1) {
     return {kSystemError, "open"};
   }
@@ -98,6 +119,12 @@ ElfFile::OpenResult ElfFile::openNoThrow(
   int r = detail::signal_safe_libc::fstat(fd_, &st);
   if (r == -1) {
     return {kSystemError, "fstat"};
+  }
+  // Only regular files can be meaningfully mapped; fstat follows symlinks,
+  // so symlinked binaries keep working.
+  if (!S_ISREG(st.st_mode)) {
+    errno = EINVAL;
+    return {kInvalidElfFile, "not a regular file"};
   }
 
   uint64_t mtime_ns = st.st_mtim.tv_sec * 1000'000'000LL + st.st_mtim.tv_nsec;
@@ -156,6 +183,16 @@ ElfFile::OpenResult ElfFile::openAndFollow(
   auto debugFileEnd =
       std::find(debugFileName.begin(), debugFileName.end(), uint8_t{0});
   if (debugFileEnd == debugFileName.end()) {
+    return result;
+  }
+  // The name is stored verbatim and in practice is often a full path, which
+  // this dirname-joined lookup deliberately does not resolve. Reject ".."
+  // segments so a hostile name cannot escape the executable's directory via
+  // the joined path; a rejection falls back to the original file below.
+  const std::string_view debugName(
+      reinterpret_cast<const char*>(debugFileName.data()),
+      static_cast<size_t>(debugFileEnd - debugFileName.begin()));
+  if (detail::elfHasDotDotSegment(debugName)) {
     return result;
   }
   auto debugFileLen = std::distance(debugFileName.begin(), debugFileEnd);
@@ -250,6 +287,9 @@ ElfFile::OpenResult ElfFile::init() noexcept {
       0) {
     return {kInvalidElfFile, "invalid ELF magic"};
   }
+  if (length_ < sizeof(ElfEhdr)) {
+    return {kInvalidElfFile, "not an ELF file (too short)"};
+  }
   char c;
   if (detail::signal_safe_libc::pread(fd_, &c, 1, length_ - 1) != 1) {
     auto msg =
@@ -339,7 +379,8 @@ size_t ElfFile::getNumSections() const noexcept {
   // When e_shnum == 0, the real count is in sh_size of section header 0.
   size_t shnum = elfHeader().e_shnum;
   if (shnum == 0 && elfHeader().e_shoff != 0) {
-    shnum = at<ElfShdr>(elfHeader().e_shoff).sh_size;
+    const auto* sectionZero = atIfValid<ElfShdr>(elfHeader().e_shoff);
+    shnum = sectionZero == nullptr ? 0 : sectionZero->sh_size;
   }
   return shnum;
 }
@@ -350,22 +391,41 @@ size_t ElfFile::getSectionHeaderStrIndex() const noexcept {
   // real index is in sh_link of section header 0.
   size_t shstrndx = elfHeader().e_shstrndx;
   if (shstrndx == SHN_XINDEX && elfHeader().e_shoff != 0) {
-    shstrndx = at<ElfShdr>(elfHeader().e_shoff).sh_link;
+    const auto* sectionZero = atIfValid<ElfShdr>(elfHeader().e_shoff);
+    shstrndx = sectionZero == nullptr ? SHN_UNDEF : sectionZero->sh_link;
   }
   return shstrndx;
 }
 
 const ElfShdr* ElfFile::getSectionByIndex(size_t idx) const noexcept {
-  FOLLY_SAFE_CHECK(idx < getNumSections(), "invalid section index");
-  if (elfHeader().e_shoff + (idx + 1) * sizeof(ElfShdr) > length_) {
-    // Handle ELFs with invalid internal offsets to program/section headers.
+  if (idx >= getNumSections()) {
     return nullptr;
   }
-  return &at<ElfShdr>(elfHeader().e_shoff + idx * sizeof(ElfShdr));
+  size_t relativeOffset;
+  size_t sectionOffset;
+  if (!folly::checked_mul(&relativeOffset, idx, sizeof(ElfShdr)) ||
+      !folly::checked_add(
+          &sectionOffset,
+          static_cast<size_t>(elfHeader().e_shoff),
+          relativeOffset)) {
+    return nullptr;
+  }
+  return atIfValid<ElfShdr>(sectionOffset);
 }
 
 std::span<const uint8_t> ElfFile::getSectionBody(
     const ElfShdr& section) const noexcept {
+  if (section.sh_type == SHT_NOBITS) {
+    return {};
+  }
+  size_t end;
+  if (!folly::checked_add(
+          &end,
+          static_cast<size_t>(section.sh_offset),
+          static_cast<size_t>(section.sh_size)) ||
+      end > length_) {
+    return {};
+  }
   return std::span(
       reinterpret_cast<const uint8_t*>(file_ + section.sh_offset),
       section.sh_size);
@@ -373,28 +433,40 @@ std::span<const uint8_t> ElfFile::getSectionBody(
 
 std::span<const uint8_t> ElfFile::getSegmentBody(
     const ElfPhdr& segment) const noexcept {
+  size_t end;
+  if (!folly::checked_add(
+          &end,
+          static_cast<size_t>(segment.p_offset),
+          static_cast<size_t>(segment.p_filesz)) ||
+      end > length_) {
+    return {};
+  }
   return std::span(
       reinterpret_cast<const uint8_t*>(file_ + segment.p_offset),
       segment.p_filesz);
 }
 
-void ElfFile::validateStringTable(const ElfShdr& stringTable) const noexcept {
-  FOLLY_SAFE_CHECK(
-      stringTable.sh_type == SHT_STRTAB, "invalid type for string table");
-
-  const char* start = file_ + stringTable.sh_offset;
+bool ElfFile::validateStringTable(const ElfShdr& stringTable) const noexcept {
+  if (stringTable.sh_type != SHT_STRTAB) {
+    return false;
+  }
+  const auto body = getSectionBody(stringTable);
+  if (body.size() != stringTable.sh_size) {
+    return false;
+  }
+  if (stringTable.sh_size == 0) {
+    // Even an empty table must start inside the file.
+    return stringTable.sh_offset <= length_;
+  }
   // First and last bytes must be 0
-  FOLLY_SAFE_CHECK(
-      stringTable.sh_size == 0 ||
-          (start[0] == '\0' && start[stringTable.sh_size - 1] == '\0'),
-      "invalid string table");
+  return body.front() == 0 && body.back() == 0;
 }
 
 const char* ElfFile::getString(
     const ElfShdr& stringTable, size_t offset) const noexcept {
-  validateStringTable(stringTable);
-  FOLLY_SAFE_CHECK(
-      offset < stringTable.sh_size, "invalid offset in string table");
+  if (!validateStringTable(stringTable) || offset >= stringTable.sh_size) {
+    return nullptr;
+  }
 
   return file_ + stringTable.sh_offset + offset;
 }
@@ -413,6 +485,10 @@ const char* ElfFile::getSectionName(const ElfShdr& section) const noexcept {
 }
 
 const ElfShdr* ElfFile::getSectionByName(const char* name) const noexcept {
+  if (name == nullptr) {
+    return nullptr;
+  }
+  const std::string_view requestedName{name};
   auto shstrndx = getSectionHeaderStrIndex();
   if (shstrndx == SHN_UNDEF) {
     return nullptr; // no section name string table
@@ -423,14 +499,17 @@ const ElfShdr* ElfFile::getSectionByName(const char* name) const noexcept {
     return nullptr;
   }
   const ElfShdr& sectionNames = *stringSection;
-  const char* start = file_ + sectionNames.sh_offset;
+  if (!validateStringTable(sectionNames)) {
+    return nullptr;
+  }
+  const char* sectionNameTable = file_ + sectionNames.sh_offset;
 
   // Find section with the appropriate sh_name offset
   const ElfShdr* foundSection = iterateSections([&](const ElfShdr& sh) {
     if (sh.sh_name >= sectionNames.sh_size) {
       return false;
     }
-    return !strcmp(start + sh.sh_name, name);
+    return requestedName == sectionNameTable + sh.sh_name;
   });
   return foundSection;
 }
@@ -444,7 +523,7 @@ ElfFile::Symbol ElfFile::getDefinitionByAddress(
       if (sym.st_shndx == SHN_UNDEF) {
         return false; // not a definition
       }
-      if (address >= sym.st_value && address < sym.st_value + sym.st_size) {
+      if (address >= sym.st_value && address - sym.st_value < sym.st_size) {
         foundSymbol.first = &section;
         foundSymbol.second = &sym;
         return true;
@@ -467,6 +546,10 @@ ElfFile::Symbol ElfFile::getDefinitionByAddress(
 ElfFile::Symbol ElfFile::getSymbolByName(
     const char* name, std::initializer_list<uint32_t> types) const noexcept {
   Symbol foundSymbol{nullptr, nullptr};
+  if (name == nullptr) {
+    return foundSymbol;
+  }
+  const std::string_view requestedName{name};
 
   auto findSection = [&](const ElfShdr& section) -> bool {
     // This section has no string table associated w/ its symbols; hence we
@@ -487,7 +570,7 @@ ElfFile::Symbol ElfFile::getSymbolByName(
         return false;
       }
       const char* sym_name = getString(*linkSection, sym.st_name);
-      if (strcmp(sym_name, name) == 0) {
+      if (sym_name != nullptr && requestedName == sym_name) {
         foundSymbol.first = &section;
         foundSymbol.second = &sym;
         return true;
@@ -513,7 +596,7 @@ ElfFile::Symbol ElfFile::getSymbolByName(
 const ElfShdr* ElfFile::getSectionContainingAddress(
     ElfAddr addr) const noexcept {
   return iterateSections([&](const ElfShdr& sh) -> bool {
-    return (addr >= sh.sh_addr) && (addr < (sh.sh_addr + sh.sh_size));
+    return addr >= sh.sh_addr && addr - sh.sh_addr < sh.sh_size;
   });
 }
 

@@ -727,6 +727,7 @@ fb_dirsync_cpp_benchmark(
     name = "fmt_utility_bench",
     srcs = ["FmtUtilityBench.cpp"],
     deps = [
+        "fbsource//third-party/fmt:fmt",
         "//folly:benchmark",
         "//folly:fmt_utility",
         "//folly/init:init",
@@ -1237,6 +1238,7 @@ fb_dirsync_cpp_unittest(
     deps = [
         "fbsource//third-party/glog:glog",
         "//folly:producer_consumer_queue",
+        "//folly/lang:align",
         "//folly/portability:gtest",
     ],
 )
@@ -1355,6 +1357,8 @@ fb_dirsync_cpp_unittest(
         "//folly/io/async:async_base",
         "//folly/portability:gmock",
         "//folly/portability:gtest",
+        "//folly/portability:sys_resource",
+        "//folly/portability:unistd",
         "//folly/synchronization/test:barrier",
     ],
 )
@@ -1429,22 +1433,13 @@ fb_dirsync_cpp_unittest(
     name = "socket_address_test",
     srcs = ["SocketAddressTest.cpp"],
     deps = [
-        ":socket_address_test_helper",
         "//folly:network_address",
         "//folly:string",
         "//folly/container:array",
         "//folly/portability:gtest",
         "//folly/portability:sockets",
+        "//folly/testing:socket_address_test_helper",
         "//folly/testing:test_util",
-    ],
-)
-
-fb_dirsync_cpp_library(
-    name = "socket_address_test_helper",
-    srcs = ["SocketAddressTestHelper.cpp"],
-    headers = ["SocketAddressTestHelper.h"],
-    deps = [
-        "//folly/portability:sockets",
     ],
 )
 
@@ -1604,6 +1599,7 @@ fb_dirsync_cpp_library(
         "fbsource//third-party/glog:glog",
         "//folly:random",
         "//folly:synchronized",
+        "//folly/concurrency/testing:run_parallel",
         "//folly/container:foreach",
         "//folly/portability:gtest",
     ],
@@ -1877,16 +1873,6 @@ fb_dirsync_cpp_unittest(
         "//folly:random",
         "//folly:varint",
         "//folly/portability:gtest",
-    ],
-)
-
-fb_dirsync_cpp_library(
-    name = "json_mock_util",
-    headers = [
-        "JsonMockUtil.h",
-    ],
-    exported_deps = [
-        "//folly/json:json_mock_util",
     ],
 )
 

@@ -23,9 +23,7 @@ folly_add_library(
     folly_lang_safe_assert
     folly_memory_sanitize_leak
     folly_packed_sync_ptr
-    folly_synchronization_atomic_struct
     folly_synchronization_atomic_util
-    folly_synchronization_detail_atomic_utils
 )
 
 folly_add_library(
@@ -41,7 +39,6 @@ folly_add_library(
     folly_lang_exception
     folly_memory
     folly_portability_fcntl
-    folly_portability_fmt_compile
     folly_portability_unistd
     folly_scope_guard
     folly_system_thread_id
@@ -159,3 +156,4 @@ folly_add_library(
 
 add_subdirectory(container)
 add_subdirectory(memory)
+add_subdirectory(testing)

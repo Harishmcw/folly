@@ -144,38 +144,20 @@ class SQGroupInfoRegistry {
   // a group is a collection of io_uring instances
   // that share up to numThreads SQ poll threads
   struct SQGroupInfo {
-    struct SQSubGroupInfo {
-      folly::F14FastSet<int> fds;
-      size_t count{0};
-
-      void add(int fd) {
-        CHECK(!fds.contains(fd));
-        fds.insert(fd);
-        ++count;
-      }
-
-      size_t remove(int fd) {
-        auto iter = fds.find(fd);
-        CHECK(iter != fds.end());
-        fds.erase(fd);
-        --count;
-
-        return count;
-      }
-    };
+    using FdSet = folly::F14FastSet<int>;
 
     SQGroupInfo(size_t num, std::set<uint32_t> const& cpus)
         : subGroups(num), nextCpu(cpus.begin(), cpus.end()) {}
 
     // returns the least loaded subgroup
-    SQSubGroupInfo* getNextSubgroup() {
+    FdSet* getNextSubgroup() {
       size_t min_idx = 0;
       for (size_t i = 0; i < subGroups.size(); i++) {
-        if (subGroups[i].count == 0) {
+        if (subGroups[i].empty()) {
           return &subGroups[i];
         }
 
-        if (subGroups[i].count < subGroups[min_idx].count) {
+        if (subGroups[i].size() < subGroups[min_idx].size()) {
           min_idx = i;
         }
       }
@@ -183,31 +165,31 @@ class SQGroupInfoRegistry {
       return &subGroups[min_idx];
     }
 
-    size_t add(int fd, SQSubGroupInfo* sg) {
+    size_t add(int fd, FdSet* sg) {
       CHECK(!fdSgMap.contains(fd));
       fdSgMap.emplace(fd, sg);
-      sg->add(fd);
-      ++count;
+      CHECK(!sg->contains(fd));
+      sg->insert(fd);
 
-      return count;
+      return fdSgMap.size();
     }
 
     size_t remove(int fd) {
       auto iter = fdSgMap.find(fd);
       CHECK(iter != fdSgMap.end());
-      iter->second->remove(fd);
+      auto& fds = *iter->second;
+      const auto fdIter = fds.find(fd);
+      CHECK(fdIter != fds.end());
+      fds.erase(fdIter);
       fdSgMap.erase(iter);
-      --count;
 
-      return count;
+      return fdSgMap.size();
     }
 
     // file descriptor to sub group index map
-    folly::F14FastMap<int, SQSubGroupInfo*> fdSgMap;
+    folly::F14FastMap<int, FdSet*> fdSgMap;
     // array of subgoups
-    std::vector<SQSubGroupInfo> subGroups;
-    // number of entries
-    size_t count{0};
+    std::vector<FdSet> subGroups;
     // Set of CPUs we will bind threads to.
     std::vector<uint32_t> nextCpu;
     int nextCpuIndex{0};
@@ -239,9 +221,9 @@ class SQGroupInfoRegistry {
     auto [iter, inserted] = map_.try_emplace(groupName, groupNumThreads, cpus);
     auto& info = iter->second;
     auto* sg = info.getNextSubgroup();
-    if (sg->count) {
+    if (!sg->empty()) {
       // we're adding to a non empty subgroup
-      params.wq_fd = *(sg->fds.begin());
+      params.wq_fd = *(sg->begin());
       params.flags |= IORING_SETUP_ATTACH_WQ;
     } else if (!info.nextCpu.empty()) {
       // First use of this subgroup, pin thread to CPU if specified.
@@ -302,14 +284,9 @@ bool validateZeroCopyRxOptions(IoUringOptions& options) {
 } // namespace
 
 IoUringBackend::SocketPair::SocketPair() {
-  if (::socketpair(AF_UNIX, SOCK_STREAM, 0, fds_.data())) {
+  const auto socktype = SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC;
+  if (::socketpair(AF_UNIX, socktype, 0, fds_.data())) {
     throw std::runtime_error("socketpair error");
-  }
-
-  // set the sockets to non blocking mode
-  for (auto fd : fds_) {
-    auto flags = ::fcntl(fd, F_GETFL, 0);
-    ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
   }
 }
 
@@ -322,15 +299,16 @@ IoUringBackend::SocketPair::~SocketPair() {
 }
 
 IoUringBackend::FdRegistry::FdRegistry(io_uring& ioRing, uint32_t n)
-    : ioRing_(ioRing), files_(n, -1), inUse_(n), records_(n) {
+    : ioRing_(ioRing), files_(n, -1), records_(n) {
   if (n > std::numeric_limits<int>::max()) {
     throw std::runtime_error("too many registered files");
   }
 }
 
 int IoUringBackend::FdRegistry::init() {
-  if (inUse_) {
-    int ret = ::io_uring_register_files(&ioRing_, files_.data(), inUse_);
+  if (!files_.empty()) {
+    int ret = ::io_uring_register_files(
+        &ioRing_, files_.data(), static_cast<unsigned int>(files_.size()));
 
     if (!ret) {
       // build and set the free list head if we succeed
@@ -339,7 +317,7 @@ int IoUringBackend::FdRegistry::init() {
         free_.push_front(records_[i]);
       }
     } else {
-      LOG(ERROR) << "io_uring_register_files(" << inUse_ << ") "
+      LOG(ERROR) << "io_uring_register_files(" << files_.size() << ") "
                  << "failed errno = " << errno << ":\""
                  << folly::errnoStr(errno) << "\" " << this;
     }
@@ -493,7 +471,6 @@ void IoUringBackend::processSignalReadIoSqe(
 
 IoUringBackend::IoUringBackend(Options options)
     : options_(std::move(options)),
-      numEntries_(options_.capacity),
       fdRegistry_(ioRing_, options_.registeredFds) {
   // create the timer fd
   timerFd_ = ::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
@@ -555,7 +532,6 @@ IoUringBackend::IoUringBackend(Options options)
                   << " retrying with capacity = " << options_.capacity;
 
         params_.cq_entries = options_.capacity;
-        numEntries_ = options_.capacity;
         continue;
       }
 
@@ -582,16 +558,15 @@ IoUringBackend::IoUringBackend(Options options)
               << "\" ret = " << ret << " fd = " << ioRing_.ring_fd;
   }
 
-  numEntries_ *= 2;
-  poolAllocRemaining_ = numEntries_;
+  poolAllocRemaining_ = options_.capacity * 2;
 
   // timer entry
-  timerEntry_ = std::make_unique<IoSqe>(this, false, true /*persist*/);
-  timerEntry_->backendCb_ = IoUringBackend::processTimerIoSqe;
+  timerEntry_ =
+      std::make_unique<IoSqe>(this, processTimerIoSqe, false, true /*persist*/);
 
   // signal entry
-  signalReadEntry_ = std::make_unique<IoSqe>(this, false, true /*persist*/);
-  signalReadEntry_->backendCb_ = IoUringBackend::processSignalReadIoSqe;
+  signalReadEntry_ = std::make_unique<IoSqe>(
+      this, processSignalReadIoSqe, false, true /*persist*/);
   // delay adding the timer and signal fds until running the loop first time
 
   if (!usingDeferTaskrun_) {
@@ -925,12 +900,6 @@ IoUringBackend::IoSqe* IoUringBackend::allocIoSqe() {
 }
 
 void IoUringBackend::releaseIoSqe(IoUringBackend::IoSqe* aioIoSqe) noexcept {
-  // unregister the file dsecriptor record
-  if (aioIoSqe->fdRecord_) {
-    unregisterFd(aioIoSqe->fdRecord_);
-    aioIoSqe->fdRecord_ = nullptr;
-  }
-
   if (aioIoSqe->poolAlloc_) [[likely]] {
     aioIoSqe->event_ = nullptr;
     freeList_.push_front(*aioIoSqe);
@@ -971,7 +940,6 @@ void IoUringBackend::processPollIo(
             std::min<int64_t>(res, std::numeric_limits<short>::max())));
 
     ioSqe->res_ = res;
-    ioSqe->cqeFlags_ = flags;
     activeEvents_.push_back(*ioSqe);
   } else {
     releaseIoSqe(ioSqe);
@@ -1873,7 +1841,6 @@ void IoUringBackend::queueRead(
     int fd, void* buf, size_t nbytes, off_t offset, FileOpCallback&& cb) {
   iovec iov{buf, nbytes};
   auto* ioSqe = new ReadIoSqe(this, fd, &iov, offset, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
@@ -1882,7 +1849,6 @@ void IoUringBackend::queueWrite(
     int fd, const void* buf, size_t nbytes, off_t offset, FileOpCallback&& cb) {
   iovec iov{const_cast<void*>(buf), nbytes};
   auto* ioSqe = new WriteIoSqe(this, fd, &iov, offset, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
@@ -1890,7 +1856,6 @@ void IoUringBackend::queueWrite(
 void IoUringBackend::queueReadv(
     int fd, Range<const iovec*> iovecs, off_t offset, FileOpCallback&& cb) {
   auto* ioSqe = new ReadvIoSqe(this, fd, iovecs, offset, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
@@ -1898,22 +1863,21 @@ void IoUringBackend::queueReadv(
 void IoUringBackend::queueWritev(
     int fd, Range<const iovec*> iovecs, off_t offset, FileOpCallback&& cb) {
   auto* ioSqe = new WritevIoSqe(this, fd, iovecs, offset, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
 
 void IoUringBackend::queueFsync(int fd, FileOpCallback&& cb) {
-  queueFsync(fd, FSyncFlags::FLAGS_FSYNC, std::move(cb));
+  queueFsync(fd, /*flags=*/0, std::move(cb));
 }
 
 void IoUringBackend::queueFdatasync(int fd, FileOpCallback&& cb) {
-  queueFsync(fd, FSyncFlags::FLAGS_FDATASYNC, std::move(cb));
+  queueFsync(fd, IORING_FSYNC_DATASYNC, std::move(cb));
 }
 
-void IoUringBackend::queueFsync(int fd, FSyncFlags flags, FileOpCallback&& cb) {
+void IoUringBackend::queueFsync(
+    int fd, unsigned int flags, FileOpCallback&& cb) {
   auto* ioSqe = new FSyncIoSqe(this, fd, flags, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
@@ -1921,7 +1885,6 @@ void IoUringBackend::queueFsync(int fd, FSyncFlags flags, FileOpCallback&& cb) {
 void IoUringBackend::queueOpenat(
     int dfd, const char* path, int flags, mode_t mode, FileOpCallback&& cb) {
   auto* ioSqe = new FOpenAtIoSqe(this, dfd, path, flags, mode, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
@@ -1929,14 +1892,12 @@ void IoUringBackend::queueOpenat(
 void IoUringBackend::queueOpenat2(
     int dfd, const char* path, open_how* how, FileOpCallback&& cb) {
   auto* ioSqe = new FOpenAt2IoSqe(this, dfd, path, how, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
 
 void IoUringBackend::queueClose(int fd, FileOpCallback&& cb) {
   auto* ioSqe = new FCloseIoSqe(this, fd, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
@@ -1950,7 +1911,6 @@ void IoUringBackend::queueStatx(
     FileOpCallback&& cb) {
   auto* ioSqe = new FStatxIoSqe(
       this, dirfd, pathname, flags, mask, statxbuf, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
@@ -1958,7 +1918,6 @@ void IoUringBackend::queueStatx(
 void IoUringBackend::queueRename(
     const char* oldPath, const char* newPath, FileOpCallback&& cb) {
   auto* ioSqe = new FRenameIoSqe(this, oldPath, newPath, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
@@ -1966,7 +1925,6 @@ void IoUringBackend::queueRename(
 void IoUringBackend::queueUnlinkat(
     int dirfd, const char* path, int flags, FileOpCallback&& cb) {
   auto* ioSqe = new FUnlinkIoSqe(this, dirfd, path, flags, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
@@ -1978,7 +1936,6 @@ void IoUringBackend::queueUnlink(const char* path, FileOpCallback&& cb) {
 void IoUringBackend::queueFallocate(
     int fd, int mode, off_t offset, off_t len, FileOpCallback&& cb) {
   auto* ioSqe = new FAllocateIoSqe(this, fd, mode, offset, len, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
@@ -1986,7 +1943,6 @@ void IoUringBackend::queueFallocate(
 void IoUringBackend::queueSendmsg(
     int fd, const msghdr* msg, unsigned int flags, FileOpCallback&& cb) {
   auto* ioSqe = new SendmsgIoSqe(this, fd, msg, flags, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }
@@ -1994,7 +1950,6 @@ void IoUringBackend::queueSendmsg(
 void IoUringBackend::queueRecvmsg(
     int fd, msghdr* msg, unsigned int flags, FileOpCallback&& cb) {
   auto* ioSqe = new RecvmsgIoSqe(this, fd, msg, flags, std::move(cb));
-  ioSqe->backendCb_ = processFileOpCB;
 
   submitImmediateIoSqe(*ioSqe);
 }

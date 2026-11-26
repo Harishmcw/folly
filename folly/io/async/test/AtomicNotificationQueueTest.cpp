@@ -15,12 +15,17 @@
  */
 
 #include <algorithm>
+#include <cerrno>
 #include <functional>
 #include <iterator>
+#include <memory>
 #include <set>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
+#include <folly/FileUtil.h>
+#include <folly/ScopeGuard.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/EventBaseAtomicNotificationQueue.h>
 #include <folly/portability/Fcntl.h>
@@ -30,6 +35,7 @@ using namespace folly;
 using namespace std;
 
 #ifndef _WIN32
+
 namespace {
 // The descriptors this process has open, by number. Descriptors are handed
 // out lowest-free, so anything a test opens lands well under the bound.
@@ -298,7 +304,75 @@ TEST(AtomicNotificationQueueTest, DriveSnapshot) {
   EXPECT_TRUE(lastRan);
 }
 
+TEST(
+    AtomicNotificationQueueTest,
+    DestructionDiscardsTaskWithoutInvokingConsumer) {
+  size_t consumed = 0;
+  size_t destroyed = 0;
+  auto consumer = [&consumed](folly::Func&& task) noexcept {
+    ++consumed;
+    task();
+  };
+  {
+    EventBaseAtomicNotificationQueue<folly::Func, decltype(consumer)> queue(
+        std::move(consumer));
+    auto token = std::shared_ptr<int>(new int(0), [&destroyed](int* value) {
+      ++destroyed;
+      delete value;
+    });
+    queue.putMessage([token = std::move(token)] {});
+    EXPECT_EQ(0, destroyed);
+  }
+  EXPECT_EQ(0, consumed);
+  EXPECT_EQ(1, destroyed);
+}
+
 #ifndef _WIN32
+
+TEST(AtomicNotificationQueueTest, ThrowingConsumerMoveClosesDescriptors) {
+  struct Consumer {
+    Consumer() = default;
+    Consumer(Consumer&&) { throw std::runtime_error("consumer move"); }
+    void operator()(int&&) noexcept {}
+  };
+  const auto before = openFds();
+  Consumer consumer;
+  EXPECT_THROW(
+      (EventBaseAtomicNotificationQueue<int, Consumer>(std::move(consumer))),
+      std::runtime_error);
+  EXPECT_EQ(before, openFds());
+}
+
+TEST(AtomicNotificationQueueTest, PipeFallbackSetupAndCleanup) {
+  using QueueBase = detail::EventBaseAtomicNotificationQueueBase;
+  int fds[2]{-1, -1};
+  ASSERT_TRUE(QueueBase::createPipe(fds));
+  auto cleanup = makeGuard([&] { QueueBase::closePipe(fds); });
+  for (int fd : fds) {
+    const int flags = fcntl(fd, F_GETFL);
+    ASSERT_NE(-1, flags);
+    EXPECT_NE(0, flags & O_NONBLOCK);
+    const int descriptorFlags = fcntl(fd, F_GETFD);
+    ASSERT_NE(-1, descriptorFlags);
+    EXPECT_NE(0, descriptorFlags & FD_CLOEXEC);
+  }
+  char signal;
+  const auto result = readNoInt(fds[0], &signal, sizeof(signal));
+  const int error = errno;
+  EXPECT_EQ(-1, result);
+  EXPECT_TRUE(error == EAGAIN || error == EWOULDBLOCK);
+
+  const int reader = fds[0];
+  const int writer = fds[1];
+  QueueBase::closePipe(fds);
+  const int readerFlags = fcntl(reader, F_GETFD);
+  const int writerFlags = fcntl(writer, F_GETFD);
+  EXPECT_EQ(-1, readerFlags);
+  EXPECT_EQ(-1, writerFlags);
+  const vector<int> expected{-1, -1};
+  EXPECT_EQ(expected, vector<int>(begin(fds), end(fds)));
+}
+
 // Every descriptor the queue opens is close-on-exec: the eventfd by
 // construction, and the pipe it falls back to (macOS) on both ends. A child
 // process has no use for a wakeup descriptor, and an inherited one is leaked
@@ -323,4 +397,5 @@ TEST(AtomicNotificationQueueTest, FdsAreCloseOnExec) {
     EXPECT_TRUE(fcntl(fd, F_GETFD) & FD_CLOEXEC) << "fd " << fd;
   }
 }
+
 #endif

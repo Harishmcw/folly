@@ -137,6 +137,7 @@ fb_dirsync_cpp_library(
     exported_deps = [
         "//folly:c_portability",
         "//folly:likely",
+        "//folly:traits",
     ],
 )
 
@@ -146,7 +147,6 @@ fb_dirsync_cpp_library(
     apple_sdks = (IOS, APPLETVOS, MACOSX, WATCHOS),
     use_raw_headers = True,
     exported_deps = [
-        ":static_const",
         "//folly:portability",
     ],
 )
@@ -218,6 +218,17 @@ fb_dirsync_cpp_library(
     exported_deps = [
         "//folly:c_portability",
         "//folly:cpp_attributes",
+    ],
+)
+
+fb_dirsync_cpp_library(
+    name = "memory",
+    headers = ["Memory.h"],
+    apple_sdks = (IOS, APPLETVOS, MACOSX, WATCHOS),
+    use_raw_headers = True,
+    exported_deps = [
+        ":bits",
+        "//folly:c_portability",
     ],
 )
 
@@ -342,16 +353,6 @@ fb_dirsync_cpp_library(
 )
 
 fb_dirsync_cpp_library(
-    name = "static_const",
-    headers = ["StaticConst.h"],
-    apple_sdks = (IOS, APPLETVOS, MACOSX, WATCHOS),
-    use_raw_headers = True,
-    exported_deps = [
-        "//folly:portability",
-    ],
-)
-
-fb_dirsync_cpp_library(
     name = "strong",
     headers = ["Strong.h"],
     use_raw_headers = True,
@@ -423,9 +424,7 @@ fb_dirsync_cpp_library(
 )
 
 fb_dirsync_cpp_library(
-    name = "uncaught_exceptions",
-    srcs = ["UncaughtExceptions.cpp"],
-    headers = ["UncaughtExceptions.h"],
+    name = "uncaught_exceptions",  # @shim
     apple_sdks = (IOS, APPLETVOS, MACOSX, WATCHOS),
     use_raw_headers = True,
     exported_deps = [

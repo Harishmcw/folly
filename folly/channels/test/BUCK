@@ -1,7 +1,22 @@
+load("@fbsource//tools/build_defs/dirsync:fb_dirsync_cpp_benchmark.bzl", "fb_dirsync_cpp_benchmark")
 load("@fbsource//tools/build_defs/dirsync:fb_dirsync_cpp_library.bzl", "fb_dirsync_cpp_library")
 load("@fbsource//tools/build_defs/dirsync:fb_dirsync_cpp_unittest.bzl", "fb_dirsync_cpp_unittest")
 
 oncall("fbcode_entropy_wardens_folly")
+
+fb_dirsync_cpp_benchmark(
+    name = "channel_benchmark",
+    srcs = ["ChannelBenchmark.cpp"],
+    deps = [
+        "//folly:benchmark",
+        "//folly:cancellation_token",
+        "//folly/channels:channel",
+        "//folly/coro:blocking_wait",
+        "//folly/coro:task",
+        "//folly/init:init",
+        "//folly/io/async:request_context",
+    ],
+)
 
 fb_dirsync_cpp_unittest(
     name = "channel_processor_test",
@@ -21,8 +36,11 @@ fb_dirsync_cpp_unittest(
     deps = [
         ":channel_test_util",
         "//folly/channels:channel",
+        "//folly/channels/testing:mock_next_callback",
         "//folly/coro:blocking_wait",
+        "//folly/coro:task",
         "//folly/executors:manual_executor",
+        "//folly/io/async:request_context",
         "//folly/portability:gtest",
     ],
 )
@@ -34,6 +52,7 @@ fb_dirsync_cpp_unittest(
         ":channel_test_util",
         "//folly/channels:consume_channel",
         "//folly/channels:fanout_channel",
+        "//folly/channels/testing:mock_next_callback",
         "//folly/executors:manual_executor",
         "//folly/executors:serial_executor",
         "//folly/portability:gmock",
@@ -48,6 +67,7 @@ fb_dirsync_cpp_unittest(
         ":channel_test_util",
         "//folly/channels:consume_channel",
         "//folly/channels:fanout_sender",
+        "//folly/channels/testing:mock_next_callback",
         "//folly/executors:manual_executor",
         "//folly/executors:serial_executor",
         "//folly/portability:gmock",
@@ -78,6 +98,7 @@ fb_dirsync_cpp_unittest(
         ":channel_test_util",
         "//folly/channels:consume_channel",
         "//folly/channels:merge_channel",
+        "//folly/channels/testing:mock_next_callback",
         "//folly/executors:manual_executor",
         "//folly/executors:serial_executor",
         "//folly/portability:gmock",
@@ -92,6 +113,7 @@ fb_dirsync_cpp_unittest(
         ":channel_test_util",
         "//folly/channels:consume_channel",
         "//folly/channels:merge",
+        "//folly/channels/testing:mock_next_callback",
         "//folly/executors:manual_executor",
         "//folly/executors:serial_executor",
         "//folly/portability:gmock",
@@ -107,6 +129,7 @@ fb_dirsync_cpp_unittest(
         "//folly/channels:consume_channel",
         "//folly/channels:max_concurrent_rate_limiter",
         "//folly/channels:multiplex_channel",
+        "//folly/channels/testing:mock_next_callback",
         "//folly/coro:blocking_wait",
         "//folly/executors:manual_executor",
         "//folly/executors:serial_executor",
@@ -121,6 +144,7 @@ fb_dirsync_cpp_unittest(
     deps = [
         ":channel_test_util",
         "//folly/channels:producer",
+        "//folly/channels/testing:mock_next_callback",
         "//folly/executors:manual_executor",
         "//folly/portability:gmock",
         "//folly/portability:gtest",
@@ -133,6 +157,7 @@ fb_dirsync_cpp_unittest(
     deps = [
         ":channel_test_util",
         "//folly/channels:proxy_channel",
+        "//folly/channels/testing:mock_next_callback",
         "//folly/executors:manual_executor",
         "//folly/portability:gmock",
         "//folly/portability:gtest",
@@ -149,6 +174,7 @@ fb_dirsync_cpp_unittest(
         "//folly/channels:consume_channel",
         "//folly/channels:max_concurrent_rate_limiter",
         "//folly/channels:transform",
+        "//folly/channels/testing:mock_next_callback",
         "//folly/coro:async_generator",
         "//folly/coro:detach_on_cancel",
         "//folly/executors:manual_executor",

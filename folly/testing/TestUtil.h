@@ -18,6 +18,8 @@
 
 #include <map>
 #include <string>
+#include <string_view>
+#include <system_error>
 
 #include <folly/Range.h>
 #include <folly/ScopeGuard.h>
@@ -80,6 +82,13 @@ class TemporaryFile {
     path_ = std::exchange(other.path_, fs::path());
   }
 };
+
+/**
+ * Returns a TemporaryFile filled with `size` bytes of reproducible seeded
+ * random data, synced to disk and closed (but deleted on destruction),
+ * for io tests.
+ */
+TemporaryFile makeTemporaryFileWithRandomData(size_t size);
 
 /**
  * Temporary directory.
@@ -263,6 +272,15 @@ class CaptureFD {
 //  Care must be taken to set up the test and resource build rules in accordance
 //  with this function.
 fs::path find_resource(std::string_view resource);
+
+/// report_resource_exhaustion
+///
+/// Notifies an optional test-runner extension of suspected resource exhaustion.
+/// Does not change the test outcome or throw if reporting fails.
+void report_resource_exhaustion(
+    std::string_view operation,
+    std::error_code error,
+    std::string_view message = {}) noexcept;
 
 } // namespace test
 } // namespace folly

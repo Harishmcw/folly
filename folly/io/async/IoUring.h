@@ -42,9 +42,7 @@ class IoUringOp : public AsyncBaseOp {
     bool sqe128;
     bool cqe32;
 
-    bool operator==(const Options& options) const {
-      return sqe128 == options.sqe128 && cqe32 == options.cqe32;
-    }
+    bool operator==(const Options& options) const = default;
   };
 
   IoUringOp(
@@ -167,7 +165,6 @@ class IoUring : public AsyncBase {
 
   size_t maxSubmit_;
   IoUringOp::Options options_;
-  struct io_uring_params params_;
   struct io_uring ioRing_;
   mutable SharedMutex submitMutex_;
 };

@@ -97,7 +97,7 @@ fb_dirsync_cpp_library(
     apple_sdks = (IOS, APPLETVOS, MACOSX, WATCHOS),
     use_raw_headers = True,
     deps = [
-        "//folly/portability:fmt_compile",
+        "fbsource//third-party/fmt:fmt",
     ],
     exported_deps = [
         "//folly/portability:sockets",
@@ -184,7 +184,6 @@ fb_dirsync_cpp_library(
         "//folly:utility",
         "//folly/functional:invoke",
         "//folly/lang:exception",
-        "//folly/lang:static_const",
     ],
 )
 
@@ -280,6 +279,7 @@ fb_dirsync_cpp_library(
         "//folly/hash:murmur_hash",
         "//folly/lang:hint",
         "//folly/memory:sanitize_leak",
+        "//folly/portability:gflags",
         "//folly/random:hash",
         "//folly/synchronization:call_once",
     ],

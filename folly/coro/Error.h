@@ -28,11 +28,9 @@ namespace folly::coro {
 
 class co_error final {
  public:
-  template <
-      typename... A,
-      std::enable_if_t<
-          sizeof...(A) && std::is_constructible<exception_wrapper, A...>::value,
-          int> = 0>
+  template <typename... A>
+    requires(
+        sizeof...(A) > 0 && std::is_constructible_v<exception_wrapper, A...>)
   explicit co_error(A&&... a) noexcept(
       std::is_nothrow_constructible<exception_wrapper, A...>::value)
       : ex_(static_cast<A&&>(a)...) {
@@ -59,8 +57,5 @@ class co_stopped_may_throw_t final {
 };
 
 inline constexpr co_stopped_may_throw_t co_stopped_may_throw{};
-
-[[deprecated("Use co_stopped_may_throw")]]
-inline constexpr co_stopped_may_throw_t co_cancelled{};
 
 } // namespace folly::coro
